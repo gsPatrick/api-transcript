@@ -35,7 +35,7 @@ const cryptoUtils = {
    * @param {object} payload - Os dados a serem incluídos no token (ex: { userId: 'uuid', email: 'user@example.com' }).
    * @returns {string} O JWT assinado.
    */
-  generateToken: (payload) => {
+   generateToken: (payload) => {
     return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
   },
 

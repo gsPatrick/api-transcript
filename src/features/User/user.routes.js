@@ -19,8 +19,6 @@ router.put('/me', userController.updateMe);
 router.post('/me/openai-key', userController.updateMyOpenAiApiKey);
 router.delete('/me/openai-key', userController.removeMyOpenAiApiKey);
 
-// Rota para listar todos os planos (para usuários logados)
-router.get('/plans', userController.getPlans);
 
 // Rota para obter o plano ativo e uso de recursos do usuário
 router.get('/me/plan-usage', userController.getMyPlanAndUsage);

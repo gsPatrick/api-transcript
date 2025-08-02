@@ -19,6 +19,12 @@ router.get('/my-transcriptions', transcriptionController.listMyTranscriptions);
 // Rota para buscar uma transcrição específica
 router.get('/my-transcriptions/:id', transcriptionController.getTranscription);
 
+router.get('/my-transcriptions/:id/audio', transcriptionController.getTranscriptionAudio);
+
+
+router.get('/my-transcriptions/:id/agent-actions', transcriptionController.getAgentActionsForTranscription);
+
+
 // Rota para obter o uso atual do plano do usuário
 router.get('/my-usage', transcriptionController.getMyPlanUsage);
 

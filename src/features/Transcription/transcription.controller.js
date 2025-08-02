@@ -2,6 +2,51 @@
 const transcriptionService = require('./transcription.service');
 
 const transcriptionController = {
+  
+  async getAgentActionsForTranscription(req, res, next) {
+    try {
+      const { id } = req.params;
+      const userId = req.user.userId;
+      const actions = await transcriptionService.getAgentActionsForTranscription(id, userId);
+      return res.status(200).json(actions);
+    } catch (error) {
+      console.error('Erro no controller getAgentActionsForTranscription:', error);
+      if (error.message.includes('não encontrada')) {
+        return res.status(404).json({ message: error.message });
+      }
+      next(error);
+    }
+  },
+
+
+   async getTranscriptionAudio(req, res, next) {
+    try {
+      const { id } = req.params;
+      const userId = req.user.userId;
+
+      const audioPath = await transcriptionService.getTranscriptionAudioPath(id, userId);
+      
+      // Cria um stream de leitura do arquivo
+      const stream = fs.createReadStream(audioPath);
+
+      // Define o cabeçalho Content-Type para que o navegador saiba que é um áudio
+      // Idealmente, salvaríamos o mimetype no DB, mas por enquanto vamos inferir
+      res.setHeader('Content-Type', 'audio/mpeg'); // Assumindo MP3, funciona para a maioria dos casos
+
+      // Envia o stream como resposta
+      stream.pipe(res);
+
+    } catch (error) {
+      console.error('Erro no controller getTranscriptionAudio:', error);
+      if (error.message.includes('não encontrado')) {
+        return res.status(404).json({ message: error.message });
+      }
+      next(error);
+    }
+  },
+
+  
+  
   /**
    * Endpoint para upload e transcrição de áudio.
    * Usa `upload.single('audioFile')` do Multer para lidar com o arquivo.

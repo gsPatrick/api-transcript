@@ -1,22 +1,27 @@
 const authService = require('./auth.service');
 
 const authController = {
-  async register(req, res) {
-    const { name, email, password } = req.body;
+ async register(req, res) {
+    // Adicione 'role' à desestruturação
+    const { name, email, password, role } = req.body; 
 
     if (!name || !email || !password) {
       return res.status(400).json({ message: 'Nome, e-mail e senha são obrigatórios.' });
     }
 
+    // Opcional: Adicione validação para a role (se permitindo apenas 'user' ou 'admin')
+    if (role && !['user', 'admin'].includes(role)) {
+      return res.status(400).json({ message: 'Role inválida. As roles permitidas são "user" ou "admin".' });
+    }
+
     try {
-      const { user, token } = await authService.registerUser(name, email, password);
+      // Passe 'role' para o serviço
+      const { user, token } = await authService.registerUser(name, email, password, role); 
       return res.status(201).json({ message: 'Usuário registrado com sucesso!', user, token });
     } catch (error) {
-      // Erros específicos do serviço (ex: usuário já existe)
       if (error.message.includes('Usuário com este e-mail já existe.')) {
         return res.status(409).json({ message: error.message });
       }
-      // Outros erros internos
       console.error('Erro ao registrar usuário:', error);
       return res.status(500).json({ message: 'Erro interno do servidor ao registrar usuário.' });
     }

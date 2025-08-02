@@ -1,24 +1,46 @@
 // src/config/mercadoPago.js
-const mercadopago = require('mercadopago');
-const settings = require('./settings'); // Importa o novo gerenciador de configurações
 
-// Função para configurar o Mercado Pago
-const configureMercadoPago = () => {
-  const accessToken = settings.get('MERCADO_PAGO_ACCESS_TOKEN');
+const { MercadoPagoConfig, Preference, Payment } = require('mercadopago');
+const settings = require('./settings');
 
-  if (!accessToken) {
-    console.warn('AVISO: MERCADO_PAGO_ACCESS_TOKEN não configurado no DB ou .env. Funções do Mercado Pago podem falhar.');
-    // Pode ser útil lançar um erro ou lidar com isso de forma mais robusta em produção
+const mercadopagoServices = {
+  client: null, // <<< ADICIONADO: Armazena o cliente
+  preferences: null,
+  payment: null,
+  isConfigured: false,
+
+  configure: () => {
+    const accessToken = 'TEST-543842517815393-052409-2b6e0c6eaa8b7efc9885a56cb8f22377-230029956'
+    
+    // Log para depuração
+    if (!accessToken) {
+      console.error('[MercadoPago] ERRO CRÍTICO: MERCADO_PAGO_ACCESS_TOKEN não foi encontrado nas configurações ou .env. O serviço de pagamento estará desativado.');
+      mercadopagoServices.isConfigured = false;
+      return;
+    }
+
+    console.log(`[MercadoPago] Configurando o SDK com o Access Token...`);
+
+    try {
+      // Cria o cliente de configuração com o token
+      const client = new MercadoPagoConfig({ 
+        accessToken: accessToken,
+        options: { timeout: 5000 }
+      });
+
+      // Armazena as instâncias
+      mercadopagoServices.client = client; // <<< ADICIONADO
+      mercadopagoServices.preferences = new Preference(client);
+      mercadopagoServices.payment = new Payment(client);
+      mercadopagoServices.isConfigured = true;
+
+      console.log('✅ [MercadoPago] SDK configurado com sucesso.');
+
+    } catch (error) {
+      console.error('[MercadoPago] ERRO CRÍTICO ao instanciar os serviços do SDK:', error);
+      mercadopagoServices.isConfigured = false;
+    }
   }
-
-  mercadopago.configure({
-    access_token: accessToken || 'YOUR_FALLBACK_TOKEN_IF_NEEDED', // Fallback opcional
-  });
-  console.log('Mercado Pago configurado.');
 };
 
-// Exporta a instância e a função de configuração
-module.exports = {
-  ...mercadopago, // Exporta todas as propriedades da instância do mercadopago
-  configure: configureMercadoPago, // Exporta a função para reconfigurar
-};
+module.exports = mercadopagoServices;

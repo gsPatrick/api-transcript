@@ -1,4 +1,3 @@
-// src/models/agentAction.js
 module.exports = (sequelize, DataTypes) => {
   const AgentAction = sequelize.define('AgentAction', {
     id: {
@@ -7,49 +6,52 @@ module.exports = (sequelize, DataTypes) => {
       primaryKey: true,
       allowNull: false,
     },
+    // CORREÇÃO: Referência a 'users' em minúsculas
     userId: {
       type: DataTypes.UUID,
       allowNull: false,
       references: {
-        model: 'Users',
+        model: 'users',
         key: 'id',
       },
       onUpdate: 'CASCADE',
       onDelete: 'CASCADE',
     },
+    // CORREÇÃO: Referência a 'agents' em minúsculas
     agentId: {
       type: DataTypes.UUID,
       allowNull: false,
       references: {
-        model: 'Agents',
+        model: 'agents',
         key: 'id',
       },
       onUpdate: 'CASCADE',
-      onDelete: 'RESTRICT', // Não permite deletar um agente se ele foi usado
+      onDelete: 'RESTRICT',
     },
-    transcriptionId: { // Opcional: se o input for de uma transcrição existente
+    // CORREÇÃO: Referência a 'transcriptions' em minúsculas
+    transcriptionId: {
       type: DataTypes.UUID,
       allowNull: true,
       references: {
-        model: 'Transcriptions',
+        model: 'transcriptions',
         key: 'id',
       },
       onUpdate: 'CASCADE',
-      onDelete: 'SET NULL', // Se a transcrição for deletada, o link vira null
+      onDelete: 'SET NULL',
     },
-    inputText: { // O texto que foi passado para o agente (pode vir da transcrição ou de outro lugar)
+    inputText: {
       type: DataTypes.TEXT,
       allowNull: false,
     },
-    outputText: { // O resultado da ação do agente
+    outputText: {
       type: DataTypes.TEXT,
       allowNull: true,
     },
-    outputFormat: { // O formato de saída solicitado (text, pdf)
+    outputFormat: {
       type: DataTypes.ENUM('text', 'pdf'),
       allowNull: false,
     },
-    outputFilePath: { // Caminho do arquivo gerado (se outputFormat for pdf)
+    outputFilePath: {
       type: DataTypes.STRING,
       allowNull: true,
     },
@@ -62,11 +64,11 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.TEXT,
       allowNull: true,
     },
-    usedSystemToken: { // Indica se usou o token do sistema ou do usuário
+    usedSystemToken: {
       type: DataTypes.BOOLEAN,
       allowNull: false,
     },
-    cost: { // Custo estimado da chamada à API (opcional, para controle financeiro)
+    cost: {
       type: DataTypes.DECIMAL(10, 4),
       allowNull: true,
     }

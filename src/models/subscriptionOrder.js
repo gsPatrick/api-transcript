@@ -1,4 +1,3 @@
-// src/models/subscriptionOrder.js
 module.exports = (sequelize, DataTypes) => {
   const SubscriptionOrder = sequelize.define('SubscriptionOrder', {
     id: {
@@ -7,51 +6,53 @@ module.exports = (sequelize, DataTypes) => {
       primaryKey: true,
       allowNull: false,
     },
+    // CORREÇÃO: Referência a 'users' em minúsculas
     userId: {
       type: DataTypes.UUID,
       allowNull: false,
       references: {
-        model: 'Users',
+        model: 'users',
         key: 'id',
       },
       onUpdate: 'CASCADE',
-      onDelete: 'CASCADE', // Se o usuário for deletado, seus pedidos de assinatura também
+      onDelete: 'CASCADE',
     },
+    // CORREÇÃO: Referência a 'plans' em minúsculas
     planId: {
       type: DataTypes.UUID,
       allowNull: false,
       references: {
-        model: 'Plans',
+        model: 'plans',
         key: 'id',
       },
       onUpdate: 'CASCADE',
-      onDelete: 'RESTRICT', // Não permite deletar um plano se houver pedidos de assinatura relacionados
+      onDelete: 'RESTRICT',
     },
-    totalAmount: { // Valor do plano no momento da compra
+    totalAmount: {
       type: DataTypes.DECIMAL(10, 2),
       allowNull: false,
     },
-    status: { // pending, approved, rejected, cancelled, in_process
+    status: {
       type: DataTypes.ENUM('pending', 'approved', 'rejected', 'cancelled', 'in_process'),
       defaultValue: 'pending',
       allowNull: false,
     },
-    mercadopagoPreferenceId: { // ID da preferência gerada no Mercado Pago
+    mercadopagoPreferenceId: {
       type: DataTypes.STRING,
       allowNull: true,
-      unique: true, // Cada pedido de assinatura gera uma preferência única
+      unique: true,
     },
-    mercadopagoPaymentId: { // ID do pagamento efetivado no Mercado Pago (vem do webhook)
+    mercadopagoPaymentId: {
       type: DataTypes.STRING,
       allowNull: true,
-      unique: true, // Cada pagamento tem um ID único
+      unique: true,
     },
-    mercadopagoPaymentDetails: { // Detalhes completos do pagamento do MP (JSONB para flexibilidade)
+    mercadopagoPaymentDetails: {
       type: DataTypes.JSONB,
       allowNull: true,
     },
   }, {
-    tableName: 'subscription_orders', // Nome da tabela no banco de dados
+    tableName: 'subscription_orders',
     timestamps: true,
   });
 

@@ -11,13 +11,17 @@
   "description": "",
   "dependencies": {
     "bcryptjs": "^3.0.2",
+    "cors": "^2.8.5",
     "dotenv": "^17.2.1",
     "express": "^5.1.0",
     "jsonwebtoken": "^9.0.2",
+    "mercadopago": "^2.8.0",
     "multer": "^2.0.2",
+    "node-cron": "^4.2.1",
     "openai": "^5.10.2",
     "pdfkit": "^0.17.1",
     "pg": "^8.16.3",
-    "sequelize": "^6.37.7"
+    "sequelize": "^6.37.7",
+    "uuid": "^11.1.0"
   }
 }

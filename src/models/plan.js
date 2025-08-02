@@ -1,4 +1,5 @@
 // src/models/plan.js
+
 module.exports = (sequelize, DataTypes) => {
   const Plan = sequelize.define('Plan', {
     id: {
@@ -28,18 +29,6 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.JSONB,
       allowNull: false,
       defaultValue: {},
-      /*
-        Estrutura para 'features' relacionada a agentes:
-        {
-          "maxAgentUses": 50,                 // Quantidade máxima de usos de agentes de IA (-1 para ilimitado)
-          "allowUserAgentCreation": false,    // O usuário pode criar seus próprios agentes de IA?
-          "maxUserAgents": 5,                 // NOVO: Quantidade máxima de agentes que o usuário pode criar (-1 para ilimitado)
-          "userAgentCreationResetPeriod": "monthly", // NOVO: 'monthly', 'yearly', 'never' (para limite total)
-          "allowUserProvideOwnAgentToken": false,
-          "useSystemTokenForSystemAgents": true,
-          "allowedSystemAgentIds": [],
-        }
-      */
     },
   }, {
     tableName: 'plans',
@@ -48,6 +37,19 @@ module.exports = (sequelize, DataTypes) => {
 
   Plan.associate = (models) => {
     Plan.hasMany(models.User, { foreignKey: 'planId', as: 'users' });
+
+    Plan.belongsToMany(models.Agent, {
+      through: 'AgentPlans',
+      foreignKey: 'planId',
+      as: 'allowedAgents'
+    });
+
+    // <<< MUDANÇA AQUI: Nova associação com Assistentes >>>
+    Plan.belongsToMany(models.Assistant, {
+      through: 'AssistantPlans', // Tabela de junção
+      foreignKey: 'planId',
+      as: 'allowedAssistants'
+    });
   };
 
   return Plan;

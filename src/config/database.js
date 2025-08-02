@@ -1,39 +1,21 @@
-require('dotenv').config();
+// src/config/database.js
 
-const { Sequelize } = require('sequelize');
-const path = require('path');
+// O arquivo 'models/index.js' é o ponto central que o Sequelize usa
+// para carregar a conexão (sequelize), a classe (Sequelize) e todos os modelos.
+// Ele exporta um objeto que contém tudo isso.
+const db = require('../models');
 
-const sequelize = new Sequelize(
-  process.env.DB_NAME,
-  process.env.DB_USER,
-  process.env.DB_PASSWORD,
-  {
-    host: process.env.DB_HOST,
-    dialect: process.env.DB_DIALECT,
-    port: process.env.DB_PORT,
-    logging: false,
-  }
-);
+// Apenas para garantir que a conexão foi estabelecida ao carregar este módulo.
+// Isso não é estritamente necessário se o app.js já faz a autenticação,
+// mas pode ajudar a capturar erros de conexão mais cedo.
+db.sequelize.authenticate()
+  .then(() => {
+    console.log('Database.js: Autenticação com o banco de dados bem-sucedida.');
+  })
+  .catch(err => {
+    console.error('Database.js: Erro ao autenticar com o banco de dados:', err);
+  });
 
-const db = {};
-
-db.Sequelize = Sequelize;
-db.sequelize = sequelize;
-
-// Importa todos os modelos via src/models/index.js (padrão do Sequelize)
-// Isso garante que as associações sejam configuradas corretamente
-const models = require(path.join(__dirname, '..', 'models'));
-Object.keys(models).forEach(modelName => {
-  if (modelName !== 'sequelize' && modelName !== 'Sequelize') { // Evita sobreescrever as instâncias
-    db[modelName] = models[modelName];
-  }
-});
-
-// Garante que as associações sejam chamadas, caso não sejam no index.js
-Object.keys(db).forEach(modelName => {
-  if (db[modelName].associate) {
-    db[modelName].associate(db);
-  }
-});
-
+// Exporta o objeto 'db' completo, que contém a instância sequelize,
+// a classe Sequelize e todos os modelos (User, Plan, etc.).
 module.exports = db;
