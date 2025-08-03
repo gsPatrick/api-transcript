@@ -17,25 +17,31 @@ module.exports = (sequelize) => {
       defaultValue: 'FIXO', // 'FIXO' ou 'DINAMICO'
     },
 
-    // <<< NOVO: Para a "Base de conhecimento" >>>
+    // <<< MODIFICADO: knowledgeBase agora armazena IDs de arquivos e Vector Store >>>
     knowledgeBase: {
       type: DataTypes.JSONB,
       defaultValue: {
-        files: [], // Array para armazenar o CONTEÚDO de texto dos arquivos
-        websites: [], // (Futuro)
-        text: '', // (Futuro)
+        openaiFileIds: [], // Array para armazenar IDs de File Objects da OpenAI
       },
       allowNull: false,
     },
     
-    // <<< MODIFICADO: Campo já existia, mas agora é preenchido pela UI >>>
-    // Aba: Configurações
+    // <<< NOVO: ID do Vector Store da OpenAI associado a este Assistente >>>
+    openaiVectorStoreId: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      unique: true, // Garante que cada Vector Store é único por Assistente
+    },
+
+    // <<< MODIFICADO: Campo já existia, mas agora é preenchido pela UI e usado para Runs >>>
+    // Aba: Configurações - parâmetros para o Run object da OpenAI
     runConfiguration: {
       type: DataTypes.JSONB,
       defaultValue: {
         temperature: 1,
         top_p: 1,
         max_completion_tokens: 2048,
+        // (Futuro) Outros parâmetros como max_prompt_tokens, truncation_strategy
       },
       allowNull: false,
     },
@@ -44,7 +50,7 @@ module.exports = (sequelize) => {
     outputFormat: {
       type: DataTypes.STRING,
       allowNull: false,
-      defaultValue: 'text', // 'text' ou 'pdf'
+      defaultValue: 'text', // 'text' ou 'pdf' - usado como default para o usuário
     },
     isSystemAssistant: {
       type: DataTypes.BOOLEAN,
@@ -73,8 +79,7 @@ module.exports = (sequelize) => {
       onDelete: 'SET NULL'
     },
 
-    // Campo legado da API de Assistentes, pode ser mantido ou removido.
-    // Manter por enquanto pode ser útil se a estratégia 'DINAMICO' for ativada.
+    // Campo legado da API de Assistentes, agora será o ID real da OpenAI
     openaiAssistantId: { type: DataTypes.STRING, allowNull: true, unique: true },
 
   }, {

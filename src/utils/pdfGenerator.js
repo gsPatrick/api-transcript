@@ -8,10 +8,13 @@ const pdfGenerator = {
    * Gera um arquivo PDF a partir de um texto.
    * @param {string} textContent - O texto a ser incluído no PDF.
    * @param {string} fileName - O nome do arquivo PDF a ser salvo (sem extensão).
+   * @param {string} [outputDir] - O diretório onde o PDF será salvo. Padrão para 'src/uploads'.
    * @returns {Promise<string>} O caminho completo do arquivo PDF gerado.
    */
-  async generateTextPdf(textContent, fileName) {
-    const uploadsDir = path.join(__dirname, '..', 'uploads');
+  async generateTextPdf(textContent, fileName, outputDir = null) {
+    // Se um diretório de saída não for fornecido, usa o padrão antigo
+    const uploadsDir = outputDir || path.join(__dirname, '..', 'uploads');
+    
     if (!fs.existsSync(uploadsDir)) {
       fs.mkdirSync(uploadsDir, { recursive: true });
     }

@@ -197,19 +197,18 @@ async getUserById(req, res, next) {
     }
   },
 
-  async setAdminRole(req, res) {
-    const { userId } = req.body;
-    if (!userId) {
-      return res.status(400).json({ message: 'ID do usuário é obrigatório.' });
-    }
+  async setAdminRole(userId) {
     try {
-      const result = await adminService.setAdminRole(userId);
-      return res.status(200).json(result);
-    } catch (error) {
-      if (error.message.includes('Usuário não encontrado')) {
-        return res.status(404).json({ message: error.message });
+      const user = await User.findByPk(userId);
+      if (!user) {
+        throw new Error('Usuário não encontrado.');
       }
-      return res.status(500).json({ message: error.message });
+      user.role = 'admin';
+      await user.save();
+      return { message: `Usuário ${user.email} definido como administrador.` };
+    } catch (error) {
+      console.error('Erro ao definir papel de admin:', error);
+      throw error;
     }
   },
    async updateSetting(req, res, next) {
@@ -253,12 +252,13 @@ async getUserById(req, res, next) {
     }
   },
 
-    // <<< NOVO BLOCO: Controladores de Assistentes (Sistema) >>>
+    // --- Controladores de Assistentes (Sistema) ---
   async createSystemAssistant(req, res, next) {
     try {
       const newAssistant = await adminService.createSystemAssistant(req.body);
       res.status(201).json(newAssistant);
     } catch (error) {
+      console.error('Erro no controller createSystemAssistant:', error); // Log adicionado
       next(error);
     }
   },
@@ -268,6 +268,7 @@ async getUserById(req, res, next) {
       const assistants = await adminService.getAllSystemAssistants();
       res.status(200).json(assistants);
     } catch (error) {
+      console.error('Erro no controller getAllSystemAssistants:', error); // Log adicionado
       next(error);
     }
   },
@@ -277,6 +278,7 @@ async getUserById(req, res, next) {
       const assistant = await adminService.getSystemAssistantById(req.params.id);
       res.status(200).json(assistant);
     } catch (error) {
+      console.error('Erro no controller getSystemAssistantById:', error); // Log adicionado
       next(error);
     }
   },
@@ -286,6 +288,7 @@ async getUserById(req, res, next) {
       const updatedAssistant = await adminService.updateSystemAssistant(req.params.id, req.body);
       res.status(200).json(updatedAssistant);
     } catch (error) {
+      console.error('Erro no controller updateSystemAssistant:', error); // Log adicionado
       next(error);
     }
   },
@@ -295,6 +298,18 @@ async getUserById(req, res, next) {
       const result = await adminService.deleteSystemAssistant(req.params.id);
       res.status(200).json(result);
     } catch (error) {
+      console.error('Erro no controller deleteSystemAssistant:', error); // Log adicionado
+      next(error);
+    }
+  },
+
+  // <<< NOVO: Controlador para listar Assistentes Criados por Usuários >>>
+  async getAllUserCreatedAssistants(req, res, next) {
+    try {
+      const assistants = await adminService.getAllUserCreatedAssistants();
+      res.status(200).json(assistants);
+    } catch (error) {
+      console.error('Erro no controller getAllUserCreatedAssistants:', error); // Log adicionado
       next(error);
     }
   },

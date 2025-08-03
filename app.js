@@ -21,7 +21,7 @@ console.log("Dependências carregadas. Configurando o servidor Express...");
 
 // 4. Inicializa a aplicação Express
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 3005;
 
 // 5. Configura os Middlewares essenciais
 app.use(cors());

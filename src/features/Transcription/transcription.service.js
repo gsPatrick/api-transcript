@@ -76,8 +76,9 @@ const transcriptionService = {
       const user = await User.findByPk(userId);
       if (!user) throw new Error('Usuário não encontrado durante o processamento em background.');
 
-      const estimatedDurationSeconds = (transcriptionRecord.fileSizeKB * 8) / 128;
-      const estimatedDurationMinutes = estimatedDurationSeconds / 60;
+      // CORREÇÃO: Arredondar a duração para um número inteiro antes de salvar
+      const estimatedDurationSeconds = Math.round((transcriptionRecord.fileSizeKB * 8) / 128);
+      const estimatedDurationMinutes = estimatedDurationSeconds / 60; // Mantém a precisão para o cálculo de minutos
 
       if (planFeatures.maxTranscriptionMinutes !== -1 && (user.transcriptionMinutesUsed + estimatedDurationMinutes) > planFeatures.maxTranscriptionMinutes) {
           throw new Error('A transcrição excederia o limite de minutos do seu plano.');
@@ -85,7 +86,7 @@ const transcriptionService = {
       
       await transcriptionRecord.update({
         transcriptionText: transcriptionText,
-        durationSeconds: estimatedDurationSeconds,
+        durationSeconds: estimatedDurationSeconds, // Salva o valor arredondado (inteiro)
         status: 'completed',
       });
 
@@ -191,7 +192,6 @@ const transcriptionService = {
             limit: planFeatures.maxTranscriptionMinutes ?? 0,
             remaining: calculateRemaining(planFeatures.maxTranscriptionMinutes, parseFloat(user.transcriptionMinutesUsed))
           },
-          // <<< MODIFICADO: Uso do novo contador 'assistantUsesUsed' >>>
           assistantUses: {
             used: user.assistantUsesUsed,
             limit: planFeatures.maxAgentUses ?? 0, // Reutilizando a chave 'maxAgentUses'
@@ -212,7 +212,6 @@ const transcriptionService = {
     }
   },
   
-  // <<< MODIFICADO: Tarefa agendada atualizada >>>
   async resetUserUsageAndPlanExpiration() {
     try {
       const now = new Date();
@@ -233,7 +232,6 @@ const transcriptionService = {
             agentUsesUsed: 0,
             userAgentsCreatedCount: 0,
             lastAgentCreationResetDate: null,
-            // <<< ADICIONADO: Zerar contadores de assistente na expiração >>>
             assistantUsesUsed: 0,
             assistantsCreatedCount: 0,
             lastAssistantCreationResetDate: null,
