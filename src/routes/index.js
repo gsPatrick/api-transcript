@@ -8,6 +8,7 @@ const transcriptionRoutes = require('../features/Transcription/transcription.rou
 const assistantRoutes = require('../features/Assistant/assistant.routes'); // <<< ADICIONAR
 const userRoutes = require('../features/User/user.routes');
 const publicRoutes = require('../features/Public/public.routes');
+const historyActionsRoutes = require('../features/HistoryActions/historyActions.routes');
 
 const router = express.Router();
 
@@ -20,5 +21,6 @@ router.use('/transcriptions', transcriptionRoutes);
 // router.use('/agents', agentRoutes); // REMOVER OU COMENTAR
 router.use('/assistants', assistantRoutes); // <<< ADICIONAR
 router.use('/users', userRoutes);
+router.use('/history', historyActionsRoutes);
 
 module.exports = router;

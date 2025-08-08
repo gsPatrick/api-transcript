@@ -5,19 +5,19 @@ module.exports = (sequelize) => {
   const Assistant = sequelize.define('Assistant', {
     id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
     
-    // Aba: Personalidade
+    // --- Configurações do Assistente (UI) ---
     name: { type: DataTypes.STRING, allowNull: false },
-    instructions: { type: DataTypes.TEXT, allowNull: false }, // O "PROMPT" da UI
-    model: { type: DataTypes.STRING, allowNull: false },
+    instructions: { type: DataTypes.TEXT, allowNull: false }, // O "PROMPT FIXO"
+    model: { type: DataTypes.STRING, allowNull: false, defaultValue: 'gpt-4o' },
 
-    // <<< NOVO: Para a "Estratégia do modelo" >>>
+    // Estratégia de execução (preparando para o futuro)
     executionMode: {
       type: DataTypes.STRING,
       allowNull: false,
       defaultValue: 'FIXO', // 'FIXO' ou 'DINAMICO'
     },
 
-    // <<< MODIFICADO: knowledgeBase agora armazena IDs de arquivos e Vector Store >>>
+    // Armazena IDs de arquivos para associar ao Vector Store
     knowledgeBase: {
       type: DataTypes.JSONB,
       defaultValue: {
@@ -26,31 +26,26 @@ module.exports = (sequelize) => {
       allowNull: false,
     },
     
-    // <<< NOVO: ID do Vector Store da OpenAI associado a este Assistente >>>
-    openaiVectorStoreId: {
-      type: DataTypes.STRING,
-      allowNull: true,
-      unique: true, // Garante que cada Vector Store é único por Assistente
-    },
-
-    // <<< MODIFICADO: Campo já existia, mas agora é preenchido pela UI e usado para Runs >>>
-    // Aba: Configurações - parâmetros para o Run object da OpenAI
+    // Parâmetros para a execução (Run) da OpenAI
     runConfiguration: {
       type: DataTypes.JSONB,
       defaultValue: {
         temperature: 1,
         top_p: 1,
-        max_completion_tokens: 2048,
-        // (Futuro) Outros parâmetros como max_prompt_tokens, truncation_strategy
+        // max_completion_tokens é um parâmetro do Run, não da criação do assistente
       },
       allowNull: false,
     },
+
+    // --- IDs da OpenAI ---
+    openaiAssistantId: { type: DataTypes.STRING, allowNull: true, unique: true },
+    openaiVectorStoreId: { type: DataTypes.STRING, allowNull: true, unique: true },
 
     // --- Campos de Controle e Permissão ---
     outputFormat: {
       type: DataTypes.STRING,
       allowNull: false,
-      defaultValue: 'text', // 'text' ou 'pdf' - usado como default para o usuário
+      defaultValue: 'text', // 'text' ou 'pdf'
     },
     isSystemAssistant: {
       type: DataTypes.BOOLEAN,
@@ -78,10 +73,6 @@ module.exports = (sequelize) => {
       references: { model: 'users', key: 'id' },
       onDelete: 'SET NULL'
     },
-
-    // Campo legado da API de Assistentes, agora será o ID real da OpenAI
-    openaiAssistantId: { type: DataTypes.STRING, allowNull: true, unique: true },
-
   }, {
     tableName: 'assistants',
     timestamps: true,
@@ -94,6 +85,7 @@ module.exports = (sequelize) => {
       foreignKey: 'assistantId',
       as: 'allowedPlans'
     });
+    // A relação com o histórico de execuções
     Assistant.hasMany(models.AssistantHistory, { foreignKey: 'assistantId', as: 'history' });
   };
 

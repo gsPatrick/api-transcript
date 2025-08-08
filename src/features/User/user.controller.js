@@ -114,6 +114,22 @@ const userController = {
       next(error);
     }
   },
+/**
+   * NOVO: Obtém os dados consolidados para a página do dashboard do usuário.
+   */
+  async getMyDashboardData(req, res, next) {
+    try {
+      const userId = req.user.userId;
+      const dashboardData = await userService.getUserDashboardData(userId);
+      return res.status(200).json(dashboardData);
+    } catch (error) {
+      console.error('Erro no controller getMyDashboardData:', error);
+      if (error.message.includes('não encontrado')) {
+        return res.status(404).json({ message: error.message });
+      }
+      next(error);
+    }
+  },
 };
 
 module.exports = userController;

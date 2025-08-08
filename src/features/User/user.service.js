@@ -2,7 +2,7 @@
 const db = require('../../config/database');
 const cryptoUtils = require('../../utils/crypto'); // Para hashing de senha
 const transcriptionService = require('../Transcription/transcription.service'); // Para obter uso do plano
-const { User, Plan } = db;
+const { User, Plan, Transcription } = db; // Adicionado Transcription
 
 const userService = {
   /**
@@ -136,6 +136,72 @@ const userService = {
       throw error;
     }
   },
+/**
+   * Obtém o plano ativo do usuário e suas estatísticas de uso.
+   * @param {string} userId - ID do usuário.
+   * @returns {object} Informações do plano e uso atual.
+   */
+  async getUserPlanAndUsage(userId) {
+    try {
+      const user = await User.findByPk(userId, {
+        include: { model: Plan, as: 'currentPlan' },
+        attributes: { exclude: ['password', 'openAiApiKey'] }
+      });
+      if (!user) throw new Error('Usuário não encontrado.');
+      return user; // Retorna o objeto de usuário completo com o plano
+    } catch (error) {
+      console.error('Erro ao obter plano e uso do usuário:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * NOVO: Obtém todos os dados necessários para o dashboard do usuário.
+   * @param {string} userId - ID do usuário.
+   * @returns {object} Contendo estatísticas e transcrições recentes.
+   */
+  async getUserDashboardData(userId) {
+    try {
+      // 1. Obter dados de uso e plano do usuário
+      const userWithPlan = await User.findByPk(userId, {
+        include: [{ model: Plan, as: 'currentPlan' }],
+        attributes: ['transcriptionsUsedCount', 'transcriptionMinutesUsed', 'assistantUsesUsed']
+      });
+
+      if (!userWithPlan) throw new Error('Usuário não encontrado.');
+
+      const planFeatures = userWithPlan.currentPlan?.features || {};
+
+      const stats = {
+        transcriptions: {
+          count: userWithPlan.transcriptionsUsedCount,
+          limit: planFeatures.maxAudioTranscriptions ?? 0
+        },
+        minutes: {
+          count: parseFloat(userWithPlan.transcriptionMinutesUsed),
+          limit: planFeatures.maxTranscriptionMinutes ?? 0
+        },
+        assistants: {
+          count: userWithPlan.assistantUsesUsed,
+          limit: planFeatures.maxAssistantUses ?? 0
+        }
+      };
+
+      // 2. Obter as 5 transcrições mais recentes
+      const recentTranscriptions = await Transcription.findAll({
+        where: { userId },
+        limit: 5,
+        order: [['createdAt', 'DESC']],
+        attributes: ['id', 'originalFileName', 'status', 'createdAt']
+      });
+
+      return { stats, recentTranscriptions };
+    } catch (error)
+    {
+      console.error('Erro ao buscar dados do dashboard do usuário:', error);
+      throw error;
+    }
+  }
 };
 
 module.exports = userService;

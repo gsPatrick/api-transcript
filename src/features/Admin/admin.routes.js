@@ -1,57 +1,47 @@
+// src/features/Admin/admin.routes.js
+
 const express = require('express');
 const adminController = require('./admin.controller');
 const authMiddleware = require('../../utils/authMiddleware');
 const adminMiddleware = require('../../utils/adminMiddleware');
 
+// Configuração do Multer para upload de arquivos
+const multer = require('multer');
+const upload = multer({ dest: 'uploads/temp/' });
+const uploadKnowledgeFiles = upload.array('knowledgeFiles', 10);
+
 const router = express.Router();
 
-// Todas as rotas de admin devem ser protegidas por authMiddleware e adminMiddleware
-router.use(authMiddleware);
-router.use(adminMiddleware);
+// Aplica middlewares de autenticação e autorização de admin a TODAS as rotas deste arquivo
+router.use(authMiddleware, adminMiddleware);
 
+// --- Rota de Estatísticas do Dashboard ---
+router.get('/dashboard-stats', adminController.getDashboardStats);
 
+// --- Rotas de Gerenciamento de Usuários ---
+router.get('/users', adminController.getAllUsers);
 router.get('/users/:id', adminController.getUserById);
 router.put('/users/:id', adminController.updateUser);
 router.delete('/users/:id', adminController.deleteUser);
+router.post('/users/assign-plan', adminController.assignPlanToUser);
 
-// Rotas para Planos
+// --- Rotas de Gerenciamento de Planos ---
 router.post('/plans', adminController.createPlan);
 router.get('/plans', adminController.getAllPlans);
-router.get('/plans/:id', adminController.getPlanById);
-router.put('/plans/:id', adminController.updatePlan);
-router.delete('/plans/:id', adminController.deletePlan);
+// (Futuras rotas de Planos como GET by ID, PUT, DELETE podem ser adicionadas aqui)
 
-router.get('/dashboard-stats', adminController.getDashboardStats);
-router.get('/agents/user-created', adminController.getAllUserCreatedAgents);
-
-
-// Rotas para Agentes do Sistema (legado)
-router.post('/agents/system', adminController.createSystemAgent);
-router.get('/agents/system', adminController.getAllSystemAgents);
-router.get('/agents/system/:id', adminController.getSystemAgentById);
-router.put('/agents/system/:id', adminController.updateSystemAgent);
-router.delete('/agents/system/:id', adminController.deleteSystemAgent);
-
-// Rotas para Gerenciamento de Usuários (Admin)
-router.get('/users', adminController.getAllUsers);
-router.post('/users/assign-plan', adminController.assignPlanToUser);
-router.post('/users/set-admin-role', adminController.setAdminRole);
-
-
-// --- ROTAS PARA GERENCIAMENTO DE CONFIGURAÇÕES GLOBAIS ---
+// --- Rotas de Gerenciamento de Configurações Globais ---
 router.get('/settings', adminController.listSettings);
-router.get('/settings/:key', adminController.getSetting);
 router.put('/settings/:key', adminController.updateSetting);
 
-// <<< NOVO BLOCO: Rotas para Assistentes do Sistema >>>
-router.post('/assistants/system', adminController.createSystemAssistant);
+// --- Rotas de Gerenciamento de Assistentes ---
 router.get('/assistants/system', adminController.getAllSystemAssistants);
+router.get('/assistants/user-created', adminController.getAllUserCreatedAssistants);
 router.get('/assistants/system/:id', adminController.getSystemAssistantById);
-router.put('/assistants/system/:id', adminController.updateSystemAssistant);
 router.delete('/assistants/system/:id', adminController.deleteSystemAssistant);
 
-// <<< NOVO: Rota para listar Assistentes Criados por Usuários (para replicação) >>>
-router.get('/assistants/user-created', adminController.getAllUserCreatedAssistants);
-
+// Rotas de CRUD que envolvem upload de arquivos
+router.post('/assistants/system', uploadKnowledgeFiles, adminController.createSystemAssistant);
+router.put('/assistants/system/:id', uploadKnowledgeFiles, adminController.updateSystemAssistant);
 
 module.exports = router;

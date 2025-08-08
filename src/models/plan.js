@@ -28,7 +28,16 @@ module.exports = (sequelize, DataTypes) => {
     features: {
       type: DataTypes.JSONB,
       allowNull: false,
-      defaultValue: {},
+      defaultValue: {
+        // Exemplo de estrutura para as features do plano
+        "maxAudioTranscriptions": 10,
+        "maxTranscriptionMinutes": 60,
+        "allowUserAssistantCreation": true,
+        "maxAssistants": 2,
+        "maxAssistantUses": 100, // Usos com o token do sistema
+        "useSystemTokenForSystemAgents": true,
+        "allowUserProvideOwnAgentToken": true
+      },
     },
   }, {
     tableName: 'plans',
@@ -38,17 +47,18 @@ module.exports = (sequelize, DataTypes) => {
   Plan.associate = (models) => {
     Plan.hasMany(models.User, { foreignKey: 'planId', as: 'users' });
 
-    Plan.belongsToMany(models.Agent, {
-      through: 'AgentPlans',
-      foreignKey: 'planId',
-      as: 'allowedAgents'
-    });
-
-    // <<< MUDANÇA AQUI: Nova associação com Assistentes >>>
+    // <<< NOVA ASSOCIAÇÃO COM ASSISTENTES >>>
     Plan.belongsToMany(models.Assistant, {
       through: 'AssistantPlans', // Tabela de junção
       foreignKey: 'planId',
       as: 'allowedAssistants'
+    });
+
+    // Relação legada
+    Plan.belongsToMany(models.Agent, {
+      through: 'AgentPlans',
+      foreignKey: 'planId',
+      as: 'allowedAgents'
     });
   };
 

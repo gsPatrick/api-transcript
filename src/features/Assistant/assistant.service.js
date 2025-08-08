@@ -1,562 +1,550 @@
-// src/features/Assistant/assistant.service.js
-const { OpenAI } = require('openai');
-const { v4: uuidv4 } = require('uuid');
-const db = require('../../config/database');
-const systemOpenai = require('../../config/openai'); // SDK da OpenAI com token do sistema
-const pdfGenerator = require('../../utils/pdfGenerator');
-const path = require('path');
-const fs = require('fs/promises'); // Para manipulação de arquivos (criar pasta, deletar)
+  // src/features/Assistant/assistant.service.js
+  const { OpenAI } = require('openai');
+  const db = require('../../config/database');
+  const systemOpenai = require('../../config/openai');
+  const pdfGenerator = require('../../utils/pdfGenerator');
+  const path = require('path');
+  const fs = require('fs');
+  const fsPromises = require('fs/promises');
 
-// Diretório base para uploads de arquivos gerados (PDFs)
-// Ajuste este caminho se sua pasta 'uploads' não estiver na raiz do projeto (fora de 'src')
-const UPLOADS_BASE_DIR = path.resolve(__dirname, '..', '..', '..', 'uploads');
+  const UPLOADS_BASE_DIR = path.resolve(__dirname, '..', '..', '..', 'uploads');
+  const { Assistant, User, Plan, Transcription, AssistantHistory } = db;
+  const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-const { Assistant, User, Plan, Transcription, AssistantHistory } = db;
+  const assistantService = {
 
-const assistantService = {
+    // =========================================================================
+    // MÉTODOS DE GERENCIAMENTO DE ASSISTENTES (CRUD)
+    // =========================================================================
 
-  /**
-   * Auxiliar: Gerencia arquivos na OpenAI (upload, delete) e no Vector Store do Assistente.
-   * @param {object} openaiClient - Instância do cliente OpenAI (system ou user).
-   * @param {string} assistantId - ID do Assistente no nosso DB.
-   * @param {Array<object>} filesToUpload - Array de objetos File do JS (do frontend).
-   * @param {Array<string>} fileIdsToDelete - Array de IDs de arquivos da OpenAI a serem deletados.
-   * @param {string|null} currentVectorStoreId - ID do Vector Store atual, se existir.
-   * @returns {Promise<{openaiFileIds: Array<string>, openaiVectorStoreId: string}>} IDs dos arquivos e do Vector Store atualizados.
-   */
-  async _manageAssistantFiles(openaiClient, assistantId, filesToUpload, fileIdsToDelete, currentVectorStoreId) {
-    let openaiFileIds = [];
-    let openaiVectorStoreId = currentVectorStoreId;
-
-    // 1. Criar ou Obter Vector Store
-    if (!openaiVectorStoreId) {
-      const vectorStore = await openaiClient.beta.vectorStores.create({
-        name: `Assistant_${assistantId}_VectorStore`,
-        expires_after: { anchor: "last_active_at", days: 30 } // Exemplo: expira após 30 dias de inatividade
+    async createAssistant(userId, assistantData, files = []) {
+      const { user } = await this._validateUserPlanForCreation(userId);
+      
+      const newAssistantDB = await Assistant.create({
+        ...assistantData,
+        createdByUserId: user.role === 'admin' ? null : userId,
+        isSystemAssistant: user.role === 'admin',
+        requiresUserOpenAiToken: user.role !== 'admin', 
       });
-      openaiVectorStoreId = vectorStore.id;
-      console.log(`[AssistantService] Novo Vector Store criado: ${openaiVectorStoreId}`);
-    } else {
-      // Obter arquivos existentes no Vector Store
+
+      const openaiClient = this._getOpenAIClientForManagement(user, newAssistantDB);
+      
+      let vectorStore;
       try {
-        const existingVectorStoreFiles = await openaiClient.beta.vectorStores.files.list(openaiVectorStoreId);
-        openaiFileIds = existingVectorStoreFiles.data.map(f => f.id);
-      } catch (error) {
-        console.warn(`[AssistantService] Erro ao listar arquivos do Vector Store ${openaiVectorStoreId}. Pode não existir mais ou erro de permissão. Criando um novo.`, error);
-        // Se o Vector Store não existe ou erro, crie um novo
-        const newVectorStore = await openaiClient.beta.vectorStores.create({ name: `Assistant_${assistantId}_VectorStore` });
-        openaiVectorStoreId = newVectorStore.id;
-        openaiFileIds = [];
-      }
-    }
+        let toolResources = {};
+        let tools = [];
 
-    // 2. Deletar arquivos marcados para remoção
-    for (const fileId of fileIdsToDelete) {
-      if (openaiFileIds.includes(fileId)) {
-        try {
-          await openaiClient.beta.vectorStores.files.del(openaiVectorStoreId, fileId);
-          await openaiClient.files.del(fileId); // Deleta o File Object principal também
-          openaiFileIds = openaiFileIds.filter(id => id !== fileId);
-          console.log(`[AssistantService] Arquivo deletado da OpenAI: ${fileId}`);
-        } catch (error) {
-          console.error(`[AssistantService] Erro ao deletar arquivo ${fileId} da OpenAI/Vector Store:`, error.message);
-        }
-      }
-    }
+        if (files && files.length > 0) {
+          tools.push({ type: "file_search" });
 
-    // 3. Upload de novos arquivos e anexar ao Vector Store
-    const newUploadedFileIds = [];
-    for (const file of filesToUpload) {
-      try {
-        const openaiFile = await openaiClient.files.create({
-          file: Buffer.from(await file.arrayBuffer()), // Converte File para Buffer
-          purpose: 'assistants',
-        });
-        await openaiClient.beta.vectorStores.files.create(openaiVectorStoreId, { file_id: openaiFile.id });
-        newUploadedFileIds.push(openaiFile.id);
-        console.log(`[AssistantService] Arquivo enviado para OpenAI: ${openaiFile.id} (${file.name})`);
-      } catch (error) {
-        console.error(`[AssistantService] Erro ao enviar arquivo ${file.name} para OpenAI:`, error.message);
-      }
-    }
-
-    openaiFileIds = [...openaiFileIds, ...newUploadedFileIds];
-
-    return { openaiFileIds, openaiVectorStoreId };
-  },
-
-  /**
-   * Cria um novo Assistente no nosso DB e na OpenAI.
-   */
-  async createAssistant(userId, assistantData) {
-    const user = await User.findByPk(userId, { include: [{ model: Plan, as: 'currentPlan' }] });
-    if (!user) throw new Error('Usuário não encontrado.');
-    const plan = user.currentPlan;
-    if (!plan || user.planExpiresAt < new Date()) throw new Error('Você precisa de um plano ativo para criar assistentes.');
-    const planFeatures = plan.features;
-    if (!planFeatures.allowUserAssistantCreation) {
-      throw new Error('Seu plano não permite a criação de assistentes personalizados.');
-    }
-    const maxAssistants = planFeatures.maxAssistants ?? -1;
-    if (maxAssistants !== -1 && user.assistantsCreatedCount >= maxAssistants) {
-      throw new Error(`Você atingiu o limite de ${maxAssistants} assistente(s) para o seu plano.`);
-    }
-
-    const { name, model, instructions, executionMode, runConfiguration, knowledgeBase, outputFormat, requiresUserOpenAiToken } = assistantData;
-    const filesToUpload = knowledgeBase.files || []; // Frontend envia objetos File
-    const openaiClient = requiresUserOpenAiToken && user.openAiApiKey
-      ? new OpenAI({ apiKey: user.openAiApiKey })
-      : systemOpenai;
-
-    let openaiAssistantId = null;
-    let openaiVectorStoreId = null;
-    let openaiFileIds = [];
-
-    try {
-      // 1. Gerenciar arquivos e Vector Store
-      const fileManagementResult = await this._manageAssistantFiles(
-        openaiClient,
-        null, // No creation, no assistantId yet
-        filesToUpload,
-        [], // No files to delete on creation
-        null // No current vector store ID
-      );
-      openaiFileIds = fileManagementResult.openaiFileIds;
-      openaiVectorStoreId = fileManagementResult.openaiVectorStoreId;
-
-      // 2. Criar Assistente na OpenAI
-      const openaiAssistant = await openaiClient.beta.assistants.create({
-        name: name,
-        instructions: instructions,
-        model: model,
-        tools: [{ type: 'file_search' }], // Habilita a ferramenta de busca de arquivos
-        tool_resources: {
-          file_search: {
-            vector_stores: [{ tool_resources: { file_ids: openaiFileIds } }],
-          },
-        },
-      });
-      openaiAssistantId = openaiAssistant.id;
-      console.log(`[AssistantService] Assistente OpenAI criado: ${openaiAssistantId}`);
-
-      // 3. Salvar no nosso DB
-      const newAssistantPayload = {
-        name,
-        model,
-        instructions,
-        executionMode,
-        runConfiguration,
-        knowledgeBase: {
-          openaiFileIds: openaiFileIds,
-        },
-        openaiVectorStoreId,
-        openaiAssistantId,
-        outputFormat: outputFormat || 'text',
-        createdByUserId: userId,
-        isSystemAssistant: false, // Usuários criam assistentes não-sistema
-        requiresUserOpenAiToken,
-      };
-
-      const newAssistant = await Assistant.create(newAssistantPayload);
-      await user.increment('assistantsCreatedCount');
-      return newAssistant;
-
-    } catch (error) {
-      console.error('[AssistantService] ERRO ao criar Assistente (OpenAI/DB):', error.message, error.response?.data);
-      // Tentar limpar recursos criados na OpenAI em caso de falha no DB
-      if (openaiAssistantId) await openaiClient.beta.assistants.del(openaiAssistantId).catch(err => console.error('Erro ao deletar Assistant OpenAI após falha:', err));
-      if (openaiVectorStoreId) await openaiClient.beta.vectorStores.del(openaiVectorStoreId).catch(err => console.error('Erro ao deletar Vector Store OpenAI após falha:', err));
-      for (const fileId of openaiFileIds) await openaiClient.files.del(fileId).catch(err => console.error('Erro ao deletar File OpenAI após falha:', err));
-      throw new Error(`Não foi possível criar o assistente. Erro da OpenAI: ${error.response?.data?.message || error.message}`);
-    }
-  },
-
-  /**
-   * Atualiza um Assistente no nosso DB e na OpenAI.
-   */
-  async updateAssistant(assistantId, userId, updateData) {
-    const assistant = await Assistant.findOne({ where: { id: assistantId, createdByUserId: userId } });
-    if (!assistant) {
-      throw new Error('Assistente não encontrado ou você não tem permissão para editá-lo.');
-    }
-
-    const { name, model, instructions, executionMode, runConfiguration, knowledgeBase, outputFormat, requiresUserOpenAiToken } = updateData;
-    const filesToUpload = knowledgeBase?.files || []; // Frontend envia objetos File
-    const fileIdsToDelete = knowledgeBase?.fileIdsToDelete || []; // Frontend envia IDs de arquivos OpenAI a deletar
-
-    const openaiClient = requiresUserOpenAiToken && user.openAiApiKey // Use o token do usuário se required ou do sistema
-      ? new OpenAI({ apiKey: user.openAiApiKey })
-      : systemOpenai;
-
-    try {
-      // 1. Gerenciar arquivos e Vector Store
-      const fileManagementResult = await this._manageAssistantFiles(
-        openaiClient,
-        assistant.id, // ID do assistente para nomear recursos
-        filesToUpload,
-        fileIdsToDelete,
-        assistant.openaiVectorStoreId
-      );
-      const updatedOpenaiFileIds = fileManagementResult.openaiFileIds;
-      const updatedOpenaiVectorStoreId = fileManagementResult.openaiVectorStoreId;
-
-      // 2. Atualizar Assistente na OpenAI
-      const openaiAssistantPayload = {
-        name: name,
-        instructions: instructions,
-        model: model,
-        tools: [{ type: 'file_search' }],
-        tool_resources: {
-          file_search: {
-            vector_stores: [{ tool_resources: { file_ids: updatedOpenaiFileIds } }],
-          },
-        },
-      };
-
-      await openaiClient.beta.assistants.update(assistant.openaiAssistantId, openaiAssistantPayload);
-      console.log(`[AssistantService] Assistente OpenAI atualizado: ${assistant.openaiAssistantId}`);
-
-      // 3. Salvar no nosso DB
-      const dbUpdatePayload = {
-        name,
-        model,
-        instructions,
-        executionMode,
-        runConfiguration,
-        knowledgeBase: {
-          openaiFileIds: updatedOpenaiFileIds,
-        },
-        openaiVectorStoreId: updatedOpenaiVectorStoreId,
-        outputFormat,
-        requiresUserOpenAiToken,
-      };
-
-      await assistant.update(dbUpdatePayload);
-      return assistant;
-
-    } catch (error) {
-      console.error('[AssistantService] ERRO ao atualizar Assistente (OpenAI/DB):', error.message, error.response?.data);
-      throw new Error(`Não foi possível atualizar o assistente. Erro da OpenAI: ${error.response?.data?.message || error.message}`);
-    }
-  },
-
-  /**
-   * Deleta um assistente do nosso DB e da OpenAI.
-   */
-  async deleteAssistant(userId, assistantId) {
-    const assistant = await Assistant.findByPk(assistantId);
-    if (!assistant || assistant.createdByUserId !== userId) { // Garante que o usuário tem permissão
-      throw new Error('Assistente não encontrado ou você não tem permissão.');
-    }
-
-    const openaiClient = assistant.requiresUserOpenAiToken && assistant.creator?.openAiApiKey
-      ? new OpenAI({ apiKey: assistant.creator.openAiApiKey })
-      : systemOpenai;
-
-    try {
-      // Deletar da OpenAI primeiro
-      if (assistant.openaiAssistantId) {
-        await openaiClient.beta.assistants.del(assistant.openaiAssistantId);
-        console.log(`[AssistantService] Assistente OpenAI deletado: ${assistant.openaiAssistantId}`);
-      }
-      if (assistant.openaiVectorStoreId) {
-        await openaiClient.beta.vectorStores.del(assistant.openaiVectorStoreId);
-        console.log(`[AssistantService] Vector Store OpenAI deletado: ${assistant.openaiVectorStoreId}`);
-      }
-
-      // Deletar do nosso DB
-      const deletedRows = await Assistant.destroy({ where: { id: assistantId } });
-      if (deletedRows === 0) {
-        throw new Error('Assistente não encontrado no DB.');
-      }
-      
-      // Decrementar contador do usuário
-      if (assistant.createdByUserId && assistant.createdByUserId === userId) { // Se foi criado por este usuário
-        const user = await User.findByPk(userId);
-        if (user && user.assistantsCreatedCount > 0) {
-          await user.decrement('assistantsCreatedCount');
-        }
-      }
-      return { message: 'Assistente deletado com sucesso.' };
-    } catch (error) {
-      console.error('[AssistantService] ERRO ao deletar Assistente:', error.message, error.response?.data);
-      throw new Error(`Não foi possível deletar o assistente. Erro da OpenAI: ${error.response?.data?.message || error.message}`);
-    }
-  },
-
-  /**
-   * Executa a ação do assistente sobre uma transcrição usando a API de Assistentes.
-   */
-  async runAssistantOnTranscription(userId, assistantId, transcriptionId, outputFormat) {
-    let historyRecord;
-    try {
-      const user = await User.findByPk(userId, { include: [{ model: Plan, as: 'currentPlan' }] });
-      // Incluir criador para pegar openAiApiKey se necessário
-      const assistant = await Assistant.findByPk(assistantId, { include: [{ model: User, as: 'creator' }] });
-      const transcription = await Transcription.findByPk(transcriptionId);
-
-      if (!user || !assistant || !transcription) throw new Error('Recursos não encontrados (Usuário, Assistente ou Transcrição).');
-      if (!assistant.openaiAssistantId) throw new Error('Este assistente não está configurado corretamente com a OpenAI.');
-      if (transcription.userId !== userId || transcription.status !== 'completed') throw new Error('Transcrição inválida ou não concluída.');
-      
-      const plan = user.currentPlan;
-      if (!plan || user.planExpiresAt < new Date()) throw new Error('Você não tem um plano ativo.');
-      
-      const planFeatures = plan.features;
-      let openaiClient = null;
-      let usedSystemToken = false;
-
-      // Lógica para determinar qual token da OpenAI usar (usuário ou sistema)
-      if (assistant.requiresUserOpenAiToken) {
-        if (!user.openAiApiKey) throw new Error('Este assistente requer sua chave da OpenAI. Configure-a em seu perfil.');
-        openaiClient = new OpenAI({ apiKey: user.openAiApiKey });
-      } else { // Assistente não exige token do usuário, verifica permissões do plano
-        if (planFeatures.allowUserProvideOwnToken && user.openAiApiKey) {
-          openaiClient = new OpenAI({ apiKey: user.openAiApiKey });
-        } else if (planFeatures.useSystemTokenForAI) { // Nova chave: useSystemTokenForAI
-          if (planFeatures.maxAssistantUses !== -1 && user.assistantUsesUsed >= planFeatures.maxAssistantUses) {
-            throw new Error('Limite de uso de assistentes atingido para o seu plano.');
-          }
-          openaiClient = systemOpenai; // Usa o token do sistema
-          usedSystemToken = true;
-        } else {
-          throw new Error('Seu plano não permite o uso deste assistente com o token da plataforma. Por favor, forneça sua própria chave da OpenAI ou adquira um plano diferente.');
-        }
-      }
-      
-      const finalOutputFormat = outputFormat || assistant.outputFormat;
-
-      historyRecord = await AssistantHistory.create({
-        userId, assistantId, transcriptionId,
-        inputText: transcription.transcriptionText,
-        outputFormat: finalOutputFormat,
-        status: 'pending',
-        usedSystemToken: usedSystemToken,
-      });
-
-      // Inicia o processamento do Assistente da OpenAI em segundo plano
-      this._processOpenAIAssistantRunInBackground(historyRecord.id, openaiClient, assistant, transcription.transcriptionText, user, usedSystemToken);
-      return historyRecord;
-
-    } catch (error) {
-      console.error('[AssistantService] ERRO ao iniciar Run do Assistente:', error.message, error.response?.data);
-      if (historyRecord) {
-        const errorMessage = error.response?.data?.message || error.message;
-        await historyRecord.update({ status: 'failed', errorMessage: `Erro: ${errorMessage}` });
-      }
-      throw error;
-    }
-  },
-  
-  /**
-   * Processa o Run do Assistente da OpenAI em segundo plano.
-   * Lida com Threads, Mensagens e Runs.
-   */
-  async _processOpenAIAssistantRunInBackground(historyId, openaiClient, assistant, inputText, user, usedSystemToken) {
-    let historyRecord;
-    let threadId = null; // Para modo DINAMICO
-    try {
-      historyRecord = await AssistantHistory.findByPk(historyId);
-      if (!historyRecord) {
-        console.error(`[AssistantService] Registro de histórico ${historyId} não encontrado.`);
-        return;
-      }
-      await historyRecord.update({ status: 'processing' });
-
-      // 1. Gerenciar Thread (conversa)
-      if (assistant.executionMode === 'DINAMICO') {
-        // Tentar encontrar uma thread existente para este user-assistant pair
-        // Por simplicidade agora, vamos criar uma nova thread a cada run no modo DINAMICO também.
-        // Uma implementação mais avançada buscaria a última thread do AssistantHistory para reutilizar.
-        // Ou o ThreadId poderia ser armazenado no modelo User/Assistant via uma tabela de junção, etc.
-        // Por hora, manteremos a criação por run, mesmo no modo DINAMICO, para demonstrar o conceito.
-        const thread = await openaiClient.beta.threads.create();
-        threadId = thread.id;
-        console.log(`[AssistantService] Nova Thread OpenAI criada para modo DINAMICO: ${threadId}`);
-      } else { // FIXO
-        const thread = await openaiClient.beta.threads.create();
-        threadId = thread.id;
-        console.log(`[AssistantService] Nova Thread OpenAI criada para modo FIXO: ${threadId}`);
-      }
-      
-      // Atualiza o registro de histórico com o threadId
-      await historyRecord.update({ openaiThreadId: threadId });
-
-      // 2. Adicionar mensagem do usuário à Thread
-      await openaiClient.beta.threads.messages.create(threadId, {
-        role: 'user',
-        content: inputText,
-        // Futuro: Adicionar suporte a outros tipos de conteúdo aqui (imagens, etc.)
-        // file_ids: [...] se o user enviar arquivos na msg
-      });
-      console.log(`[AssistantService] Mensagem adicionada à Thread ${threadId}.`);
-
-      // 3. Iniciar o Run do Assistente
-      const run = await openaiClient.beta.threads.runs.create(threadId, {
-        assistant_id: assistant.openaiAssistantId,
-        // Passa os parâmetros de runConfiguration do nosso assistente para o Run da OpenAI
-        temperature: assistant.runConfiguration.temperature,
-        top_p: assistant.runConfiguration.top_p,
-        // max_completion_tokens é usado pelo Assistente, mas não é um param direto do Run de Thread.
-        // O assistente tenta respeitar, mas não é um hard limit como no chat completions.
-        // Podemos usá-lo para a resposta final.
-        // max_completion_tokens: assistant.runConfiguration.max_completion_tokens,
-      });
-      await historyRecord.update({ openaiRunId: run.id });
-      console.log(`[AssistantService] Run OpenAI iniciado: ${run.id} na Thread ${threadId}.`);
-
-      // 4. Polling do status do Run
-      let runStatus = run.status;
-      while (runStatus === 'queued' || runStatus === 'in_progress' || runStatus === 'cancelling') {
-        await new Promise(resolve => setTimeout(resolve, 1000)); // Espera 1 segundo
-        const retrievedRun = await openaiClient.beta.threads.runs.retrieve(threadId, run.id);
-        runStatus = retrievedRun.status;
-        console.log(`[AssistantService] Run ${run.id} status: ${runStatus}`);
-      }
-
-      if (runStatus === 'completed') {
-        // 5. Recuperar mensagens da Thread para obter o resultado
-        const messages = await openaiClient.beta.threads.messages.list(threadId, { order: 'desc', limit: 1 });
-        const lastAssistantMessage = messages.data.find(msg => msg.role === 'assistant');
-        const outputText = lastAssistantMessage?.content[0]?.text?.value || 'Nenhuma resposta do assistente.';
-        console.log(`[AssistantService] Run ${run.id} concluído. Resposta: "${outputText.substring(0, 100)}..."`);
-
-        let outputFilePath = null;
-        if (historyRecord.outputFormat === 'pdf') {
-          const fileName = `assistant_output_${historyId}`;
-          await fs.mkdir(UPLOADS_BASE_DIR, { recursive: true }).catch(err => console.error('Erro ao criar pasta de uploads:', err));
-          const fullPath = await pdfGenerator.generateTextPdf(outputText, fileName, UPLOADS_BASE_DIR);
-          outputFilePath = path.basename(fullPath); 
-          console.log(`[AssistantService] PDF gerado em: ${fullPath}`);
+          vectorStore = await openaiClient.beta.vectorStores.create({
+            name: `VS_${newAssistantDB.name.replace(/\s+/g, '_')}_${Date.now()}`,
+          });
+          toolResources = { file_search: { vector_store_ids: [vectorStore.id] } };
+          
+          const fileIds = await this._uploadAndAssociateFiles(openaiClient, vectorStore.id, files);
+          
+          newAssistantDB.knowledgeBase = { openaiFileIds: fileIds };
+          newAssistantDB.openaiVectorStoreId = vectorStore.id;
         }
         
-        await historyRecord.update({ status: 'completed', outputText, outputFilePath });
-        if (usedSystemToken) await user.increment('assistantUsesUsed');
-        console.log(`[AssistantService] Ação do assistente ${historyId} concluída e uso do usuário ${user.id} atualizado.`);
+        const openaiAssistant = await openaiClient.beta.assistants.create({
+          name: newAssistantDB.name,
+          instructions: newAssistantDB.instructions,
+          model: newAssistantDB.model,
+          tools: tools,
+          tool_resources: toolResources,
+        });
 
-      } else {
-        // Tratar outros status (failed, cancelled, expired)
-        console.error(`[AssistantService] Run ${run.id} falhou com status: ${runStatus}`);
-        let errorMessage = `Run finalizou com status "${runStatus}".`;
-        if (run.last_error) {
-            errorMessage += ` Detalhes: ${JSON.stringify(run.last_error)}`;
+        newAssistantDB.openaiAssistantId = openaiAssistant.id;
+        await newAssistantDB.save();
+
+        if (user.role !== 'admin') {
+          await user.increment('assistantsCreatedCount');
         }
-        await historyRecord.update({ status: 'failed', errorMessage: `Erro no Run da OpenAI: ${errorMessage}` });
+
+        return newAssistantDB;
+
+      } catch (error) {
+          console.error("Falha na criação do assistente na OpenAI. Iniciando limpeza...", error);
+          if (vectorStore) await openaiClient.beta.vectorStores.del(vectorStore.id).catch(e => console.error("Falha ao limpar Vector Store:", e));
+          await newAssistantDB.destroy();
+          throw new Error(`Erro ao criar assistente na OpenAI: ${error.message}`);
+      }
+    },
+    
+    async updateAssistant(assistantId, userId, updateData, newFiles = [], filesToRemoveIds = []) {
+        const { user, assistant } = await this._validateUserAndGetAssistant(userId, assistantId);
+        const openaiClient = this._getOpenAIClientForManagement(user, assistant);
+
+        try {
+            await openaiClient.beta.assistants.update(assistant.openaiAssistantId, {
+                name: updateData.name,
+                instructions: updateData.instructions,
+                model: updateData.model,
+            });
+
+            if (assistant.openaiVectorStoreId) {
+                if (filesToRemoveIds.length > 0) {
+                    for (const fileId of filesToRemoveIds) {
+                        await openaiClient.beta.vectorStores.files.del(assistant.openaiVectorStoreId, fileId);
+                        await openaiClient.files.del(fileId);
+                    }
+                    assistant.knowledgeBase.openaiFileIds = assistant.knowledgeBase.openaiFileIds.filter(id => !filesToRemoveIds.includes(id));
+                }
+                if (newFiles.length > 0) {
+                    const newFileIds = await this._uploadAndAssociateFiles(openaiClient, assistant.openaiVectorStoreId, newFiles);
+                    assistant.knowledgeBase.openaiFileIds.push(...newFileIds);
+                }
+            }
+            
+            assistant.set(updateData);
+            assistant.changed('knowledgeBase', true);
+            await assistant.save();
+            
+            return assistant;
+
+        } catch (error) {
+            console.error(`Falha ao atualizar o assistente ${assistantId}:`, error);
+            throw new Error(`Erro ao atualizar assistente: ${error.message}`);
+        }
+    },
+
+    async deleteAssistant(userId, assistantId) {
+      const { user, assistant } = await this._validateUserAndGetAssistant(userId, assistantId);
+      const openaiClient = this._getOpenAIClientForManagement(user, assistant);
+
+      try {
+        await openaiClient.beta.assistants.del(assistant.openaiAssistantId);
+
+        if (assistant.openaiVectorStoreId) {
+          await openaiClient.beta.vectorStores.del(assistant.openaiVectorStoreId);
+        }
+
+        if (assistant.knowledgeBase?.openaiFileIds?.length > 0) {
+          for (const fileId of assistant.knowledgeBase.openaiFileIds) {
+            await openaiClient.files.del(fileId).catch(e => console.warn(`Aviso: Arquivo ${fileId} não pôde ser deletado na OpenAI.`));
+          }
+        }
+
+        await assistant.destroy();
+        
+        if (user.role !== 'admin' && user.assistantsCreatedCount > 0) {
+          await user.decrement('assistantsCreatedCount');
+        }
+
+        return { message: 'Assistente e todos os seus dados foram deletados com sucesso.' };
+      } catch (e) {
+        console.error(`Falha na deleção completa do assistente ${assistantId}:`, e);
+        await Assistant.destroy({ where: { id: assistantId } }); 
+        throw new Error("Erro na limpeza de dados do assistente na OpenAI, mas o registro local foi removido.");
+      }
+    },
+    
+    async listAvailableAssistants(userId) {
+      const user = await User.findByPk(userId, { 
+        include: [{ model: Plan, as: 'currentPlan' }] 
+      });
+      if (!user) throw new Error('Usuário não encontrado.');
+
+      if (!user.currentPlan || !user.planExpiresAt || user.planExpiresAt < new Date()) {
+        return [];
+      }
+      
+      const userPlan = user.currentPlan;
+      const availableAssistants = [];
+
+      const systemAssistants = await Assistant.findAll({ 
+        where: { isSystemAssistant: true } 
+      });
+
+      systemAssistants.forEach(assistant => {
+        if (!assistant.planSpecific) {
+          availableAssistants.push(assistant);
+        } 
+        else if (assistant.allowedPlanIds && assistant.allowedPlanIds.includes(userPlan.id)) {
+          availableAssistants.push(assistant);
+        }
+      });
+
+      if (userPlan.features.allowUserAssistantCreation) {
+        const userCreatedAssistants = await Assistant.findAll({
+          where: { createdByUserId: userId }
+        });
+        availableAssistants.push(...userCreatedAssistants);
+      }
+
+      return availableAssistants;
+    },
+
+    // =========================================================================
+    // LÓGICA DE EXECUÇÃO DO ASSISTENTE
+    // =========================================================================
+
+    async runAssistantOnTranscription(userId, assistantId, transcriptionId, options = {}) {
+      let historyRecord;
+      try {
+        const { user, assistant, transcription } = await this._validateRunInputs(userId, assistantId, transcriptionId);
+        
+        if (!assistant.openaiAssistantId) {
+          throw new Error("Assistente não sincronizado. Edite e salve o assistente para sincronizar com a OpenAI.");
+        }
+        
+        const openaiClient = this._getOpenAIClientForExecution(user, assistant);
+        
+        const finalOutputFormat = options.outputFormat || assistant.outputFormat;
+        
+        historyRecord = await AssistantHistory.create({
+          userId, 
+          assistantId, 
+          transcriptionId,
+          inputText: transcription.transcriptionText,
+          outputFormat: finalOutputFormat,
+          status: 'pending',
+          usedSystemToken: !assistant.requiresUserOpenAiToken,
+        });
+
+        (async () => {
+          try {
+            await this._processRunInBackground(historyRecord.id, openaiClient, assistant, transcription.transcriptionText, user, options);
+          } catch (error) {
+            console.error(`Erro fatal no processo de background [HistoryID: ${historyRecord.id}]:`, error);
+            const errorMessage = error.response?.data?.error?.message || error.message;
+            await AssistantHistory.update({ status: 'failed', errorMessage: `Erro de background: ${errorMessage}` }, { where: { id: historyRecord.id } });
+          }
+        })();
+        
+        return historyRecord;
+      } catch (error) {
+        if (historyRecord) {
+          await historyRecord.update({ status: 'failed', errorMessage: error.message });
+        }
+        throw error;
+      }
+    },
+    
+    async _processRunInBackground(historyId, openaiClient, assistant, inputText, user, options) {
+      let threadId;
+      let runId;
+      try {
+        await AssistantHistory.update({ status: 'processing' }, { where: { id: historyId } });
+
+        const thread = await openaiClient.beta.threads.create();
+        if (!thread?.id) throw new Error("Falha ao criar Thread na OpenAI.");
+        threadId = thread.id;
+        await AssistantHistory.update({ openaiThreadId: threadId }, { where: { id: historyId } });
+        console.log(`[HistoryID: ${historyId}] Thread criada com ID: ${threadId}`);
+
+        await openaiClient.beta.threads.messages.create(threadId, { 
+          role: 'user', 
+          content: `Baseado na transcrição a seguir, execute suas instruções.\n\n--- TRANSCRIÇÃO ---\n${inputText}` 
+        });
+        
+        const runConfig = assistant.runConfiguration || {};
+        
+        const runParams = {
+            assistant_id: assistant.openaiAssistantId,
+            instructions: options.dynamicPrompt || assistant.instructions,
+            temperature: runConfig.temperature ?? 1.0,
+            top_p: runConfig.top_p ?? 1.0,
+            max_completion_tokens: runConfig.max_completion_tokens || null,
+        };
+
+        const run = await openaiClient.beta.threads.runs.create(threadId, runParams);
+        if (!run?.id) throw new Error("Falha ao criar Run na OpenAI.");
+        runId = run.id;
+        await AssistantHistory.update({ openaiRunId: runId }, { where: { id: historyId } });
+        console.log(`[HistoryID: ${historyId}] Run criada com ID: ${runId}. Iniciando polling.`);
+        console.log(`[DEBUG BEFORE POLLING] threadId: "${threadId}", runId: "${runId}"`);
+        await this._pollRunStatus(historyId, threadId, runId, openaiClient, user);
+
+      } catch (error) {
+        const errorMessage = error.response?.data?.error?.message || error.message;
+        console.error(`[ERRO] Falha em _processRunInBackground para HistoryID: ${historyId}. Causa: ${errorMessage}`, { stack: error.stack });
+        await AssistantHistory.update({ status: 'failed', errorMessage: `Erro na API OpenAI: ${errorMessage}` }, { where: { id: historyId } });
+      }
+    },
+
+   // DEBUGGING COMPLETO - Adicione este código na função _pollRunStatus
+
+async _pollRunStatus(historyId, threadId, runId, openaiClient, user) {
+  // LOGS DE DEBUG COMPLETOS
+  console.log(`[DEBUG POLL START] historyId: ${historyId}`);
+  console.log(`[DEBUG POLL START] threadId: "${threadId}" (tipo: ${typeof threadId})`);
+  console.log(`[DEBUG POLL START] runId: "${runId}" (tipo: ${typeof runId})`);
+  console.log(`[DEBUG POLL START] openaiClient:`, !!openaiClient);
+  console.log(`[DEBUG POLL START] openaiClient.beta:`, !!openaiClient?.beta);
+  console.log(`[DEBUG POLL START] openaiClient.beta.threads:`, !!openaiClient?.beta?.threads);
+  console.log(`[DEBUG POLL START] openaiClient.beta.threads.runs:`, !!openaiClient?.beta?.threads?.runs);
+  
+  const startTime = Date.now();
+  const timeout = 5 * 60 * 1000;
+
+  while (Date.now() - startTime < timeout) {
+    try {
+      if (typeof threadId !== 'string' || !threadId.startsWith('thread_')) {
+        throw new Error(`[Validação] ID da Thread inválido no polling: ${threadId}`);
+      }
+      if (typeof runId !== 'string' || !runId.startsWith('run_')) {
+          throw new Error(`[Validação] ID da Run inválido no polling: ${runId}`);
+      }
+      
+      console.log(`[Polling] HistoryID: ${historyId} - Verificando status da Run: ${runId} na Thread: ${threadId}`);
+
+      // TENTATIVA 1: Método direto com debugging
+      console.log(`[DEBUG RETRIEVE] Tentativa 1 - Método direto`);
+      console.log(`[DEBUG RETRIEVE] threadId: "${threadId}", runId: "${runId}"`);
+      
+      try {
+        const runStatus = await openaiClient.beta.threads.runs.retrieve(threadId, runId);
+        console.log(`[SUCCESS] Retrieve funcionou! Status: ${runStatus.status}`);
+        
+        await AssistantHistory.update({ status: runStatus.status }, { where: { id: historyId } });
+
+        if (runStatus.status === 'completed') {
+            await this._processCompletedRun(historyId, threadId, openaiClient, user);
+            return;
+        }
+        
+        if (['failed', 'cancelled', 'expired'].includes(runStatus.status)) {
+            const lastError = runStatus.last_error;
+            const errorMessage = `A execução falhou com status: ${runStatus.status}. Causa: ${lastError ? lastError.message : 'Nenhuma informação adicional.'}`;
+            console.error(`[ERRO] HistoryID: ${historyId} - ${errorMessage}`);
+            await AssistantHistory.update({ status: 'failed', errorMessage }, { where: { id: historyId } });
+            return;
+        }
+
+        if (runStatus.status === 'requires_action') {
+            const errorMessage = 'A execução parou pois requer uma ação manual (ex: function calling) que não está implementada.';
+            console.warn(`[AVISO] Run ${runId} requer ação.`, runStatus.required_action);
+            await AssistantHistory.update({ status: 'failed', errorMessage }, { where: { id: historyId } });
+            return;
+        }
+
+        await sleep(3000);
+        
+      } catch (retrieveError) {
+        console.error(`[ERRO RETRIEVE] Falha na chamada retrieve:`, retrieveError.message);
+        
+        // TENTATIVA 2: Método alternativo usando fetch direto
+        console.log(`[DEBUG] Tentativa 2 - Usando abordagem alternativa`);
+        
+        try {
+          // Construir a URL manualmente para ver se o problema está na construção do path
+          const url = `https://api.openai.com/v1/threads/${threadId}/runs/${runId}`;
+          console.log(`[DEBUG] URL construída: ${url}`);
+          
+          // Fazer a requisição HTTP direta
+          const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${openaiClient.apiKey}`,
+              'Content-Type': 'application/json',
+              'OpenAI-Beta': 'assistants=v2'
+            }
+          });
+          
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+          
+          const runStatus = await response.json();
+          console.log(`[SUCCESS] Fetch direto funcionou! Status: ${runStatus.status}`);
+          
+          // Continuar com o processamento normal
+          await AssistantHistory.update({ status: runStatus.status }, { where: { id: historyId } });
+
+          if (runStatus.status === 'completed') {
+              await this._processCompletedRun(historyId, threadId, openaiClient, user);
+              return;
+          }
+          
+          // ... resto da lógica igual
+          
+        } catch (fetchError) {
+          console.error(`[ERRO FETCH] Falha no fetch direto:`, fetchError.message);
+          throw retrieveError; // Re-lançar o erro original
+        }
       }
 
     } catch (error) {
-      console.error(`[AssistantService] ERRO CRÍTICO durante o processamento do Run ${historyId}:`, error.message, error.response?.data);
-      let errorMessage = 'Erro desconhecido durante a execução do Assistente.';
-      if (error.response && error.response.data) {
-        errorMessage = `Erro da OpenAI: ${JSON.stringify(error.response.data)}`;
-      } else if (error.message) {
-        errorMessage = error.message;
-      }
-      
-      if (historyRecord) {
-        await historyRecord.update({ status: 'failed', errorMessage: `Erro no Run: ${errorMessage}` });
-      }
-      // Considerar deletar a thread se a falha for irrecuperável e não no modo dinâmico
-      if (threadId && assistant.executionMode === 'FIXO') {
-        await openaiClient.beta.threads.del(threadId).catch(err => console.error('Erro ao deletar Thread OpenAI após falha:', err));
-      }
-    }
-  },
-
-  /**
-   * Lista os assistentes disponíveis para um usuário.
-   */
-  async listAvailableAssistants(userId) {
-    const user = await User.findByPk(userId, { include: [{ model: Plan, as: 'currentPlan' }] });
-    if (!user) throw new Error('Usuário não encontrado.');
-    const plan = user.currentPlan;
-    if (!plan || user.planExpiresAt < new Date()) return [];
-    
-    const planFeatures = plan.features;
-    const userPlanId = plan.id;
-    let availableAssistants = [];
-
-    const allSystemAssistants = await Assistant.findAll({ where: { isSystemAssistant: true } });
-    allSystemAssistants.forEach(assistant => {
-      let isAllowed = true;
-      if (assistant.planSpecific && assistant.allowedPlanIds && assistant.allowedPlanIds.length > 0) {
-        isAllowed = assistant.allowedPlanIds.includes(userPlanId);
-      }
-      // Assume-se que 'allowedSystemAssistantIds' pode ser uma whitelist no plano.
-      // Se não for definida no plano, todos os assistentes de sistema são permitidos, a menos que o assistente seja planSpecific.
-      if (isAllowed && planFeatures.allowedSystemAssistantIds && planFeatures.allowedSystemAssistantIds.length > 0) {
-        isAllowed = planFeatures.allowedSystemAssistantIds.includes(assistant.id);
-      }
-      if (isAllowed) availableAssistants.push(assistant);
-    });
-
-    if (planFeatures.allowUserAssistantCreation) {
-      const userAssistants = await Assistant.findAll({ where: { isSystemAssistant: false, createdByUserId: userId } });
-      availableAssistants = availableAssistants.concat(userAssistants);
-    }
-    return availableAssistants;
-  },
-
-  /**
-   * Lista o histórico de ações de assistentes de um usuário.
-   */
-  async listUserHistory(userId, filters = {}) {
-    const { status, page = 1, limit = 10, transcriptionId } = filters;
-    const where = { userId };
-    if (status) where.status = status;
-    if (transcriptionId) where.transcriptionId = transcriptionId; 
-
-    const offset = (page - 1) * limit;
-    const { count, rows } = await AssistantHistory.findAndCountAll({
-      where,
-      include: [
-        { model: Assistant, as: 'assistant', attributes: ['id', 'name', 'outputFormat'] },
-        { model: Transcription, as: 'transcription', attributes: ['id', 'originalFileName'] }
-      ],
-      limit: parseInt(limit, 10),
-      offset,
-      order: [['createdAt', 'DESC']],
-      attributes: { exclude: ['outputFilePath', 'inputText', 'outputText'] } 
-    });
-    return { history: rows, total: count, totalPages: Math.ceil(count / limit), currentPage: parseInt(page, 10) };
-  },
-
-  /**
-   * Obtém os detalhes de uma ação de assistente específica do histórico.
-   */
-  async getHistoryById(historyId, userId) {
-    const history = await AssistantHistory.findOne({
-      where: { id: historyId, userId },
-      include: [
-        { model: Assistant, as: 'assistant' }, 
-        { model: Transcription, as: 'transcription' }
-      ]
-    });
-    if (!history) throw new Error('Registro de histórico não encontrado.');
-    return history;
-  },
-
-  /**
-   * Fornece o caminho completo para download de um arquivo de saída de assistente (PDF).
-   */
-  async getHistoryOutputFile(historyId, userId) {
-    const history = await AssistantHistory.findOne({ 
-      where: { id: historyId, userId, status: 'completed', outputFormat: 'pdf' } 
-    });
-    if (!history || !history.outputFilePath) {
-        throw new Error('Arquivo de saída não encontrado ou não disponível para download.');
-    }
-    
-    const fullPath = path.join(UPLOADS_BASE_DIR, history.outputFilePath); 
-
-    try {
-        await fs.access(fullPath); 
-        return fullPath;
-    } catch (err) {
-        console.error(`[AssistantService] Arquivo ${fullPath} não encontrado no servidor ou sem permissão de acesso:`, err);
-        throw new Error('Arquivo de saída não encontrado no servidor.');
+      const errorMessage = error.response?.data?.error?.message || error.message;
+      console.error(`[ERRO] Exceção durante o polling [RunID: ${runId}]: ${errorMessage}`, { stack: error.stack });
+      await AssistantHistory.update({ status: 'failed', errorMessage: `Erro de comunicação com a OpenAI: ${errorMessage}` }, { where: { id: historyId } });
+      return;
     }
   }
-};
 
-module.exports = assistantService;
+  const timeoutMessage = 'A execução excedeu o tempo limite de 5 minutos.';
+  console.error(`[ERRO] HistoryID: ${historyId} - ${timeoutMessage}`);
+  await AssistantHistory.update({ status: 'failed', errorMessage: timeoutMessage }, { where: { id: historyId } });
+},
+
+    async _processCompletedRun(historyId, threadId, openaiClient, user) {
+      const messages = await openaiClient.beta.threads.messages.list(threadId, { order: 'desc', limit: 1 });
+      if (!messages.data.length || messages.data[0].role !== 'assistant') {
+          throw new Error('Nenhuma resposta do assistente foi encontrada na thread após a conclusão.');
+      }
+      const outputText = messages.data[0].content.filter(c => c.type === 'text').map(c => c.text.value).join('\n');
+      const historyRecord = await AssistantHistory.findByPk(historyId);
+      let outputFilePath = null;
+      if (historyRecord.outputFormat === 'pdf') {
+          const fileName = `assistant_output_${historyId}`;
+          await fsPromises.mkdir(UPLOADS_BASE_DIR, { recursive: true });
+          const fullPath = await pdfGenerator.generateTextPdf(outputText, fileName, UPLOADS_BASE_DIR);
+          outputFilePath = path.basename(fullPath); 
+      }
+      await historyRecord.update({ status: 'completed', outputText, outputFilePath });
+      if (historyRecord.usedSystemToken) await user.increment('assistantUsesUsed');
+    },
+    
+    // =========================================================================
+    // MÉTODOS AUXILIARES E DE VALIDAÇÃO
+    // =========================================================================
+    
+    async _uploadAndAssociateFiles(openaiClient, vectorStoreId, files) {
+        const uploadPromises = files.map(file => {
+            return openaiClient.files.create({
+                file: fs.createReadStream(file.path),
+                purpose: 'assistants',
+            });
+        });
+        const openaiFiles = await Promise.all(uploadPromises);
+
+        await openaiClient.beta.vectorStores.fileBatches.create(vectorStoreId, {
+            file_ids: openaiFiles.map(f => f.id)
+        });
+        
+        files.forEach(file => fsPromises.unlink(file.path).catch(err => console.error(`Falha ao remover arquivo temporário ${file.path}:`, err)));
+
+        return openaiFiles.map(file => file.id);
+    },
+    
+    _getOpenAIClientForManagement(user, assistant) {
+        if (user.role === 'admin' || !assistant.requiresUserOpenAiToken) {
+            if (!systemOpenai) throw new Error("A chave de API do sistema não está configurada.");
+            return systemOpenai;
+        }
+        if (!user.openAiApiKey) throw new Error('Esta ação requer sua chave de API da OpenAI.');
+        return new OpenAI({ apiKey: user.openAiApiKey });
+    },
+    
+    _getOpenAIClientForExecution(user, assistant) {
+      if (user.role === 'admin' || !assistant.requiresUserOpenAiToken) {
+        if (!systemOpenai) throw new Error("Chave de API do sistema indisponível para execução.");
+        return systemOpenai;
+      }
+      if (!user.openAiApiKey) throw new Error('Este assistente requer sua chave de API OpenAI para ser executado.');
+      return new OpenAI({ apiKey: user.openAiApiKey });
+    },
+
+   async _validateUserPlanForCreation(userId) {
+    // --- CORREÇÃO APLICADA AQUI ---
+    // Se o userId for nulo, significa que é uma ação de sistema (admin).
+    // Neste caso, não há plano para validar. Retornamos um objeto de usuário simulado
+    // que passará nas verificações de `role` subsequentes.
+    if (!userId) {
+      return { user: { role: 'admin' } };
+    }
+
+    // Se houver um userId, a lógica original para usuários normais continua.
+    const user = await User.findByPk(userId, { include: [{ model: Plan, as: 'currentPlan' }] });
+    if (!user) throw new Error('Usuário não encontrado.');
+
+    // A validação de plano só se aplica a usuários que não são administradores.
+    if (user.role !== 'admin') {
+        const plan = user.currentPlan;
+        if (!plan || user.planExpiresAt < new Date()) throw new Error('Você precisa de um plano ativo para criar assistentes.');
+        const planFeatures = plan.features;
+        if (!planFeatures.allowUserAssistantCreation) throw new Error('Seu plano não permite criar assistentes.');
+        const max = planFeatures.maxAssistants ?? 0;
+        if (max !== -1 && user.assistantsCreatedCount >= max) throw new Error('Você atingiu o limite de criação de assistentes do seu plano.');
+    }
+    return { user };
+  },
+
+    async _validateUserAndGetAssistant(userId, assistantId) {
+        const user = await User.findByPk(userId);
+        if (!user) throw new Error('Usuário não encontrado.');
+        const whereClause = { id: assistantId };
+        if (user.role !== 'admin') {
+          whereClause.createdByUserId = userId;
+        }
+        const assistant = await Assistant.findOne({ where: whereClause });
+        if (!assistant) throw new Error('Assistente não encontrado ou você não tem permissão de acesso.');
+        return { user, assistant };
+    },
+
+    async _validateRunInputs(userId, assistantId, transcriptionId) {
+      const user = await User.findByPk(userId, { include: { model: Plan, as: 'currentPlan' } });
+      if (!user) throw new Error('Usuário não encontrado.');
+
+      const assistant = await Assistant.findByPk(assistantId);
+      if (!assistant) throw new Error('Assistente não encontrado.');
+
+      const transcription = await Transcription.findOne({ where: { id: transcriptionId, userId: user.id } });
+      if (!transcription) throw new Error('Transcrição não encontrada ou sem permissão de acesso.');
+      if (transcription.status !== 'completed') throw new Error('A transcrição ainda não foi concluída e não pode ser usada.');
+
+      if (user.role !== 'admin' && !assistant.requiresUserOpenAiToken) {
+          const plan = user.currentPlan;
+          if (!plan || user.planExpiresAt < new Date()) throw new Error('Você precisa de um plano ativo para executar assistentes.');
+          const limit = plan.features.maxAssistantUses ?? 0;
+          if (limit !== -1 && user.assistantUsesUsed >= limit) throw new Error('Você atingiu o limite de uso de assistentes do seu plano.');
+      }
+      return { user, assistant, transcription };
+    },
+    
+    async listUserHistory(userId, filters = {}) {
+      const { status, page = 1, limit = 10, transcriptionId } = filters;
+      const where = { userId };
+      if (status) where.status = status;
+      if (transcriptionId) where.transcriptionId = transcriptionId;
+
+      const offset = (page - 1) * limit;
+      const { count, rows } = await AssistantHistory.findAndCountAll({
+        where,
+        include: [
+          { model: Assistant, as: 'assistant', attributes: ['id', 'name', 'outputFormat'] },
+          { model: Transcription, as: 'transcription', attributes: ['id', 'originalFileName'] }
+        ],
+        limit: parseInt(limit, 10),
+        offset,
+        order: [['createdAt', 'DESC']],
+        attributes: { exclude: ['inputText', 'outputText'] }
+      });
+      return { history: rows, total: count, totalPages: Math.ceil(count / limit), currentPage: parseInt(page, 10) };
+    },
+
+    async getHistoryById(historyId, userId) {
+      const history = await AssistantHistory.findOne({
+        where: { id: historyId, userId },
+        include: [
+          { model: Assistant, as: 'assistant' },
+          { model: Transcription, as: 'transcription' }
+        ]
+      });
+      if (!history) throw new Error('Registro de histórico não encontrado.');
+      return history;
+    },
+
+    async getHistoryOutputFile(historyId, userId) {
+      const history = await AssistantHistory.findOne({
+        where: { id: historyId, userId, status: 'completed' }
+      });
+      if (!history || !history.outputFilePath || history.outputFormat !== 'pdf') {
+        throw new Error('Arquivo de saída não encontrado, não está pronto ou não está em formato PDF.');
+      }
+      
+      const fullPath = path.join(UPLOADS_BASE_DIR, history.outputFilePath);
+      try {
+        await fsPromises.access(fullPath);
+        return fullPath;
+      } catch (err) {
+        console.error(`Arquivo ${fullPath} não encontrado no servidor:`, err);
+        throw new Error('Arquivo de saída não encontrado no servidor.');
+      }
+    }
+  };
+
+  module.exports = assistantService;
