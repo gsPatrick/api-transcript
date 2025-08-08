@@ -6,7 +6,7 @@ const { User, Plan, SubscriptionOrder } = db; // Importa os modelos necessários
 
 
 const subscriptionService = {
- async createCheckoutForPlan(userId, planId) {
+  async createCheckoutForPlan(userId, planId) {
     if (!mercadopago.isConfigured) {
       console.error('[Checkout] Tentativa de criar checkout, mas o SDK do Mercado Pago não está configurado.');
       throw new Error('O serviço de pagamento não está disponível no momento. Por favor, contate o suporte.');
@@ -26,17 +26,7 @@ const subscriptionService = {
         status: 'pending',
       });
       
-      // --- LOGS DE DIAGNÓSTICO ---
-      console.log('--- INÍCIO DO DIAGNÓSTICO DE PREÇO ---');
-      console.log('[DIAGNÓSTICO] Valor bruto de plan.price vindo do DB:', plan.price);
-      console.log('[DIAGNÓSTICO] Tipo de plan.price (typeof):', typeof plan.price);
-      
       const priceAsFloat = parseFloat(plan.price);
-
-      console.log('[DIAGNÓSTICO] Valor após parseFloat(plan.price):', priceAsFloat);
-      console.log('[DIAGNÓSTICO] Tipo do valor após parseFloat (typeof):', typeof priceAsFloat);
-      console.log('--- FIM DO DIAGNÓSTICO DE PREÇO ---');
-      // --- FIM DOS LOGS DE DIAGNÓSTICO ---
 
       const preferencePayload = {
         items: [{
@@ -60,7 +50,11 @@ const subscriptionService = {
 
       console.log("[MercadoPago] Enviando objeto de preferência:", JSON.stringify(preferencePayload, null, 2));
 
-      const response = await mercadopago.preferences.create(preferencePayload);
+      // =========================================================================
+      // >>>>>>>>> A CORREÇÃO ESTÁ AQUI <<<<<<<<<<<<<<<
+      // O payload completo deve ser passado dentro da propriedade "body".
+      // =========================================================================
+      const response = await mercadopago.preferences.create({ body: preferencePayload });
 
       await subscriptionOrder.update({
         mercadopagoPreferenceId: response.id,
@@ -73,6 +67,7 @@ const subscriptionService = {
       };
 
     } catch (error) {
+      // O erro 'error.response?.data' geralmente contém a resposta da API do Mercado Pago
       console.error('Erro ao criar checkout para plano:', error.response?.data || error.message || error);
       throw new Error(error.response?.data?.message || 'Erro ao comunicar com o serviço de pagamento.');
     }
