@@ -190,6 +190,40 @@ const adminController = {
       next(error);
     }
   },
+
+  // <<< ADICIONADO: Controlador para ATUALIZAR um plano >>>
+  async updatePlan(req, res, next) {
+    try {
+      const updatedPlan = await adminService.updatePlan(req.params.id, req.body);
+      res.status(200).json(updatedPlan);
+    } catch (error) {
+      if (error.message.includes('não encontrado')) return res.status(404).json({ message: error.message });
+      next(error);
+    }
+  },
+
+  // <<< ADICIONADO: Controlador para DELETAR um plano >>>
+  async deletePlan(req, res, next) {
+    try {
+      const result = await adminService.deletePlan(req.params.id);
+      res.status(200).json(result);
+    } catch (error) {
+      if (error.message.includes('não encontrado')) return res.status(404).json({ message: error.message });
+      next(error);
+    }
+  },
+
+  // <<< ADICIONADO: Controlador para listar TODO o histórico >>>
+  async getAllHistory(req, res, next) {
+    try {
+      const result = await adminService.getAllHistory(req.query);
+      res.status(200).json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+  
 };
+
 
 module.exports = adminController;

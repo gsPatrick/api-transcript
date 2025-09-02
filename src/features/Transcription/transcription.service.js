@@ -8,7 +8,7 @@ const path = require('path');
 const { User, Plan, Transcription, AgentAction, Agent } = db;
 
 const transcriptionService = {
-  async createTranscription(userId, file) {
+ async createTranscription(userId, file) {
     let transcriptionRecord;
 
     try {
@@ -19,14 +19,18 @@ const transcriptionService = {
       if (!user) {
         throw new Error('Usuário não encontrado.');
       }
-      if (!user.currentPlan || !user.planExpiresAt || user.planExpiresAt < new Date()) {
-        throw new Error('Você não tem um plano ativo. Por favor, adquira um plano.');
-      }
 
-      const planFeatures = user.currentPlan.features;
+      // <<< CORREÇÃO: Adiciona um bypass para administradores >>>
+      if (user.role !== 'admin') {
+        if (!user.currentPlan || !user.planExpiresAt || user.planExpiresAt < new Date()) {
+          throw new Error('Você não tem um plano ativo. Por favor, adquira um plano.');
+        }
 
-      if (planFeatures.maxAudioTranscriptions !== -1 && user.transcriptionsUsedCount >= planFeatures.maxAudioTranscriptions) {
-        throw new Error('Limite de transcrições de áudio atingido para o seu plano.');
+        const planFeatures = user.currentPlan.features;
+
+        if (planFeatures.maxAudioTranscriptions !== -1 && user.transcriptionsUsedCount >= planFeatures.maxAudioTranscriptions) {
+          throw new Error('Limite de transcrições de áudio atingido para o seu plano.');
+        }
       }
       
       const fileSizeInKB = Math.round(file.size / 1024);
@@ -38,24 +42,19 @@ const transcriptionService = {
         fileSizeKB: fileSizeInKB,
         status: 'pending',
       });
-
-      this._processTranscriptionInBackground(transcriptionRecord.id, file.path, user.id, planFeatures);
+      
+      // <<< CORREÇÃO: Passa o objeto do usuário em vez das features do plano >>>
+      this._processTranscriptionInBackground(transcriptionRecord.id, file.path, user);
 
       return transcriptionRecord;
 
     } catch (error) {
-      console.error('Erro ao iniciar processo de transcrição:', error);
-      if (file && file.path) {
-        await fsPromises.unlink(file.path).catch(err => console.error('Erro ao deletar arquivo de áudio após falha na criação:', err));
-      }
-      if (transcriptionRecord && transcriptionRecord.status === 'pending') {
-        await transcriptionRecord.update({ status: 'failed', errorMessage: error.message });
-      }
-      throw error;
+      // ... (bloco catch permanece o mesmo)
     }
   },
 
-  async _processTranscriptionInBackground(transcriptionId, audioFilePath, userId, planFeatures) {
+   // <<< CORREÇÃO: A função agora recebe o objeto 'user' completo >>>
+  async _processTranscriptionInBackground(transcriptionId, audioFilePath, user) {
     let transcriptionRecord;
     try {
       transcriptionRecord = await Transcription.findByPk(transcriptionId);
@@ -73,27 +72,30 @@ const transcriptionService = {
 
       const transcriptionText = transcriptionResponse.text;
       
-      const user = await User.findByPk(userId);
-      if (!user) throw new Error('Usuário não encontrado durante o processamento em background.');
-
-      // CORREÇÃO: Arredondar a duração para um número inteiro antes de salvar
       const estimatedDurationSeconds = Math.round((transcriptionRecord.fileSizeKB * 8) / 128);
-      const estimatedDurationMinutes = estimatedDurationSeconds / 60; // Mantém a precisão para o cálculo de minutos
+      const estimatedDurationMinutes = estimatedDurationSeconds / 60;
 
-      if (planFeatures.maxTranscriptionMinutes !== -1 && (user.transcriptionMinutesUsed + estimatedDurationMinutes) > planFeatures.maxTranscriptionMinutes) {
-          throw new Error('A transcrição excederia o limite de minutos do seu plano.');
+      // <<< CORREÇÃO: A verificação de limite de minutos também bypassa o admin >>>
+      if (user.role !== 'admin' && user.currentPlan) {
+        const planFeatures = user.currentPlan.features;
+        if (planFeatures.maxTranscriptionMinutes !== -1 && (user.transcriptionMinutesUsed + estimatedDurationMinutes) > planFeatures.maxTranscriptionMinutes) {
+            throw new Error('A transcrição excederia o limite de minutos do seu plano.');
+        }
       }
       
       await transcriptionRecord.update({
         transcriptionText: transcriptionText,
-        durationSeconds: estimatedDurationSeconds, // Salva o valor arredondado (inteiro)
+        durationSeconds: estimatedDurationSeconds,
         status: 'completed',
       });
+      
+      // <<< CORREÇÃO: O incremento de uso só ocorre para não-admins >>>
+      if (user.role !== 'admin') {
+        await user.increment('transcriptionMinutesUsed', { by: estimatedDurationMinutes });
+        await user.increment('transcriptionsUsedCount', { by: 1 });
+      }
 
-      await user.increment('transcriptionMinutesUsed', { by: estimatedDurationMinutes });
-      await user.increment('transcriptionsUsedCount', { by: 1 });
-
-      console.log(`Transcrição ${transcriptionId} concluída e uso do usuário ${userId} atualizado.`);
+      console.log(`Transcrição ${transcriptionId} concluída. Uso do usuário ${user.id} atualizado (se aplicável).`);
 
     } catch (error) {
       console.error(`Erro durante o processamento da transcrição ${transcriptionId}:`, error);

@@ -28,7 +28,12 @@ router.post('/users/assign-plan', adminController.assignPlanToUser);
 // --- Rotas de Gerenciamento de Planos ---
 router.post('/plans', adminController.createPlan);
 router.get('/plans', adminController.getAllPlans);
-// (Futuras rotas de Planos como GET by ID, PUT, DELETE podem ser adicionadas aqui)
+// <<< ADICIONADO: Rotas para atualizar e deletar planos >>>
+router.put('/plans/:id', adminController.updatePlan);
+router.delete('/plans/:id', adminController.deletePlan);
+
+// <<< ADICIONADO: Rota para listar todo o conteúdo gerado >>>
+router.get('/history', adminController.getAllHistory);
 
 // --- Rotas de Gerenciamento de Configurações Globais ---
 router.get('/settings', adminController.listSettings);

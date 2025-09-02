@@ -229,6 +229,63 @@ const adminService = {
       newUsersThisMonth: newUsersThisMonth || 0,
     };
   },
+
+   // <<< ADICIONADO: Lógica para ATUALIZAR um plano >>>
+  async updatePlan(planId, updateData) {
+    const plan = await Plan.findByPk(planId);
+    if (!plan) {
+      throw new Error('Plano não encontrado.');
+    }
+    await plan.update(updateData);
+    return plan;
+  },
+
+  // <<< ADICIONADO: Lógica para DELETAR um plano >>>
+  async deletePlan(planId) {
+    const deletedRows = await Plan.destroy({ where: { id: planId } });
+    if (deletedRows === 0) {
+      throw new Error('Plano não encontrado.');
+    }
+    return { message: 'Plano excluído com sucesso.' };
+  },
+
+  // <<< ADICIONADO: Lógica para buscar TODO o histórico >>>
+  async getAllHistory(filters = {}) {
+    const { page = 1, limit = 10, searchTerm = '' } = filters;
+    const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+    
+    let whereCondition = {};
+    let userWhereCondition = {};
+
+    if (searchTerm) {
+      userWhereCondition = {
+        [Op.or]: [
+          { name: { [Op.iLike]: `%${searchTerm}%` } },
+          { email: { [Op.iLike]: `%${searchTerm}%` } }
+        ]
+      };
+    }
+
+    const { count, rows } = await AssistantHistory.findAndCountAll({
+      where: whereCondition,
+      include: [
+        { model: Assistant, as: 'assistant', attributes: ['id', 'name'] },
+        { model: User, as: 'user', attributes: ['id', 'name', 'email'], where: userWhereCondition, required: !!searchTerm },
+        { model: Transcription, as: 'transcription', attributes: ['id', 'originalFileName'] }
+      ],
+      limit: parseInt(limit, 10),
+      offset,
+      order: [['createdAt', 'DESC']],
+      attributes: { exclude: ['inputText', 'outputText'] }
+    });
+
+    return {
+      history: rows,
+      total: count,
+      totalPages: Math.ceil(count / parseInt(limit, 10)),
+      currentPage: parseInt(page, 10)
+    };
+  },
 };
 
 module.exports = adminService;

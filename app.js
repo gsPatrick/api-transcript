@@ -10,6 +10,8 @@ const cors = require('cors');
 const path = require('path');
 const cron = require('node-cron');
 const mainRouter = require('./src/routes'); // Roteador principal da API
+// <<< ADICIONADO: Importação do cryptoUtils para hashear a senha do admin >>>
+const cryptoUtils = require('./src/utils/crypto');
 
 // 3. Importa os módulos de configuração e serviços internos
 const db = require('./src/config/database');
@@ -56,6 +58,31 @@ db.sequelize.authenticate()
       { key: 'OPENAI_API_KEY', value: process.env.OPENAI_API_KEY || '', description: 'Chave de API da OpenAI (para uso do sistema)', isSensitive: true },
       // Adicione outras configurações padrão aqui se necessário
     ]);
+
+    // <<< INÍCIO DA LÓGICA DE CRIAÇÃO DO ADMIN PADRÃO >>>
+    console.log('Verificando/Criando usuário admin padrão...');
+    try {
+      const hashedPassword = await cryptoUtils.hashPassword('Admin123');
+      const [user, created] = await db.User.findOrCreate({
+        where: { email: 'admin@gmail.com' },
+        defaults: {
+          name: 'Administrador',
+          email: 'admin@gmail.com',
+          password: hashedPassword,
+          role: 'admin'
+        }
+      });
+
+      if (created) {
+        console.log('✅ Usuário admin padrão (admin@gmail.com) criado com sucesso.');
+      } else {
+        console.log('ℹ️ Usuário admin padrão já existe. Nenhuma ação necessária.');
+      }
+    } catch (adminError) {
+      console.error('❌ Falha crítica ao tentar criar o usuário admin padrão:', adminError);
+      process.exit(1); // Encerra a aplicação se não conseguir criar o admin
+    }
+    // <<< FIM DA LÓGICA DE CRIAÇÃO DO ADMIN PADRÃO >>>
 
     // b. Carrega todas as configurações do banco para o cache em memória
     await settings.loadSettingsFromDb();
