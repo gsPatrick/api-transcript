@@ -141,12 +141,26 @@
       }
     },
     
-    async listAvailableAssistants(userId) {
+     async listAvailableAssistants(userId) {
       const user = await User.findByPk(userId, { 
         include: [{ model: Plan, as: 'currentPlan' }] 
       });
       if (!user) throw new Error('Usuário não encontrado.');
 
+      // <<< INÍCIO DA CORREÇÃO: Bypass completo para administradores >>>
+      // Se o usuário for um admin, ele tem acesso a TODOS os assistentes.
+      if (user.role === 'admin') {
+        return Assistant.findAll({
+          include: [
+            { model: Plan, as: 'allowedPlans', attributes: ['id', 'name'], through: { attributes: [] } },
+            { model: User, as: 'creator', attributes: ['id', 'name', 'email'] }
+          ],
+          order: [['isSystemAssistant', 'DESC'], ['name', 'ASC']]
+        });
+      }
+      // <<< FIM DA CORREÇÃO >>>
+
+      // A lógica original abaixo agora só se aplica a usuários normais (não-admins)
       if (!user.currentPlan || !user.planExpiresAt || user.planExpiresAt < new Date()) {
         return [];
       }
