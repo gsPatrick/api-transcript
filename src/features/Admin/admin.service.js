@@ -2,7 +2,7 @@
 
 const db = require('../../config/database');
 const { Op } = require('sequelize');
-const { Plan, User, SubscriptionOrder, Setting, Assistant } = db;
+const { Plan, User, SubscriptionOrder, Setting, Assistant, AssistantHistory } = db;
 const settings = require('../../config/settings');
 const mercadopago = require('../../config/mercadoPago');
 const assistantService = require('../Assistant/assistant.service'); // Importa o serviço central de Assistente
