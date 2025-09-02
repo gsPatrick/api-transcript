@@ -475,25 +475,45 @@ async _pollRunStatus(historyId, threadId, runId, openaiClient, user) {
         return { user, assistant };
     },
 
-    async _validateRunInputs(userId, assistantId, transcriptionId) {
-      const user = await User.findByPk(userId, { include: { model: Plan, as: 'currentPlan' } });
-      if (!user) throw new Error('Usuário não encontrado.');
+  async _validateRunInputs(userId, assistantId, transcriptionId) {
+        const user = await User.findByPk(userId, { include: { model: Plan, as: 'currentPlan' } });
+        if (!user) throw new Error('Usuário não encontrado.');
+  
+        const assistant = await Assistant.findByPk(assistantId);
+        if (!assistant) throw new Error('Assistente não encontrado.');
+  
+        // <<< INÍCIO DA CORREÇÃO: Lógica de busca de transcrição para admin >>>
+        const transcriptionWhereClause = { id: transcriptionId };
+        // Se o usuário NÃO for admin, força a verificação de propriedade
+        if (user.role !== 'admin') {
+            transcriptionWhereClause.userId = user.id;
+        }
+        const transcription = await Transcription.findOne({ where: transcriptionWhereClause });
+        // <<< FIM DA CORREÇÃO >>>
 
-      const assistant = await Assistant.findByPk(assistantId);
-      if (!assistant) throw new Error('Assistente não encontrado.');
+        if (!transcription) throw new Error('Transcrição não encontrada ou sem permissão de acesso.');
+        if (transcription.status !== 'completed') throw new Error('A transcrição ainda não foi concluída e não pode ser usada.');
+  
+        // <<< INÍCIO DA CORREÇÃO: Lógica de validação de plano para admin >>>
+        // A verificação de plano e limites agora SÓ se aplica se o usuário NÃO for admin.
+        if (user.role !== 'admin') {
+            // Para usuários normais, só verificamos os limites se eles estiverem usando o token do sistema.
+            if (!assistant.requiresUserOpenAiToken) {
+                const plan = user.currentPlan;
+                if (!plan || user.planExpiresAt < new Date()) {
+                    throw new Error('Você precisa de um plano ativo para executar assistentes.');
+                }
+                const limit = plan.features.maxAssistantUses ?? 0;
+                if (limit !== -1 && user.assistantUsesUsed >= limit) {
+                    throw new Error('Você atingiu o limite de uso de assistentes do seu plano.');
+                }
+            }
+        }
+        // <<< FIM DA CORREÇÃO >>>
 
-      const transcription = await Transcription.findOne({ where: { id: transcriptionId, userId: user.id } });
-      if (!transcription) throw new Error('Transcrição não encontrada ou sem permissão de acesso.');
-      if (transcription.status !== 'completed') throw new Error('A transcrição ainda não foi concluída e não pode ser usada.');
-
-      if (user.role !== 'admin' && !assistant.requiresUserOpenAiToken) {
-          const plan = user.currentPlan;
-          if (!plan || user.planExpiresAt < new Date()) throw new Error('Você precisa de um plano ativo para executar assistentes.');
-          const limit = plan.features.maxAssistantUses ?? 0;
-          if (limit !== -1 && user.assistantUsesUsed >= limit) throw new Error('Você atingiu o limite de uso de assistentes do seu plano.');
-      }
-      return { user, assistant, transcription };
+        return { user, assistant, transcription };
     },
+      
     
     async listUserHistory(userId, filters = {}) {
       const { status, page = 1, limit = 10, transcriptionId } = filters;
