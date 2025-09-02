@@ -291,6 +291,70 @@ const adminService = {
       newUsersThisMonth: newUsersThisMonth || 0,
     };
   },
+
+  // <<< ADICIONADO: Funções para Gerenciamento de Transcrições pelo Admin >>>
+  async getAllTranscriptions(filters = {}) {
+    const { page = 1, limit = 10, searchTerm = '' } = filters;
+    const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+
+    let whereCondition = {};
+    if (searchTerm) {
+      whereCondition = {
+        [Op.or]: [
+          { title: { [Op.iLike]: `%${searchTerm}%` } },
+          { originalFileName: { [Op.iLike]: `%${searchTerm}%` } },
+          { '$user.name$': { [Op.iLike]: `%${searchTerm}%` } },
+          { '$user.email$': { [Op.iLike]: `%${searchTerm}%` } },
+        ],
+      };
+    }
+
+    const { count, rows } = await Transcription.findAndCountAll({
+      where: whereCondition,
+      include: [{ model: User, as: 'user', attributes: ['id', 'name', 'email'] }],
+      limit: parseInt(limit, 10),
+      offset,
+      order: [['createdAt', 'DESC']],
+      attributes: { exclude: ['transcriptionText', 'audioPath'] },
+    });
+
+    return {
+      transcriptions: rows,
+      total: count,
+      totalPages: Math.ceil(count / parseInt(limit, 10)),
+      currentPage: parseInt(page, 10),
+    };
+  },
+
+  async updateTranscription(transcriptionId, updateData) {
+    const transcription = await Transcription.findByPk(transcriptionId);
+    if (!transcription) {
+      throw new Error('Transcrição não encontrada.');
+    }
+    // Admin pode atualizar o título ou outros campos se necessário no futuro
+    if (updateData.title !== undefined) {
+      transcription.title = updateData.title;
+    }
+    await transcription.save();
+    return transcription;
+  },
+
+  async deleteTranscription(transcriptionId) {
+    // Reutiliza a lógica do serviço de transcrição do usuário, mas sem a verificação de 'userId'
+    const transcription = await Transcription.findByPk(transcriptionId);
+    if (!transcription) {
+      throw new Error('Transcrição não encontrada.');
+    }
+    if (transcription.audioPath) {
+      try {
+        await fsPromises.unlink(transcription.audioPath);
+      } catch (err) {
+        console.warn(`Admin Deletion: Could not delete audio file ${transcription.audioPath}. It may have been already removed.`);
+      }
+    }
+    await transcription.destroy();
+    return { message: 'Transcrição e dados associados foram excluídos com sucesso.' };
+  },
 };
 
 module.exports = adminService;

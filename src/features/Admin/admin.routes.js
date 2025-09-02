@@ -49,4 +49,10 @@ router.delete('/assistants/system/:id', adminController.deleteSystemAssistant);
 router.post('/assistants/system', uploadKnowledgeFiles, adminController.createSystemAssistant);
 router.put('/assistants/system/:id', uploadKnowledgeFiles, adminController.updateSystemAssistant);
 
+// <<< ADICIONADO: Rotas para Gerenciamento de Transcrições pelo Admin >>>
+router.get('/transcriptions', adminController.getAllTranscriptions);
+router.put('/transcriptions/:id', adminController.updateTranscription);
+router.delete('/transcriptions/:id', adminController.deleteTranscription);
+
+
 module.exports = router;
