@@ -222,7 +222,7 @@ const adminController = {
       next(error);
     }
   },
-  
+
 };
 
 
