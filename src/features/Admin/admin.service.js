@@ -2,7 +2,8 @@
 
 const db = require('../../config/database');
 const { Op } = require('sequelize');
-const { Plan, User, SubscriptionOrder, Setting, Assistant, AssistantHistory } = db;
+// <<< CORREÇÃO: Adicionado o modelo 'Transcription' à desestruturação >>>
+const { Plan, User, SubscriptionOrder, Setting, Assistant, AssistantHistory, Transcription } = db;
 const settings = require('../../config/settings');
 const mercadopago = require('../../config/mercadoPago');
 const assistantService = require('../Assistant/assistant.service'); // Importa o serviço central de Assistente
@@ -125,6 +126,67 @@ const adminService = {
     return Plan.findAll({ order: [['name', 'ASC']] });
   },
 
+  async updatePlan(planId, updateData) {
+    const plan = await Plan.findByPk(planId);
+    if (!plan) {
+      throw new Error('Plano não encontrado.');
+    }
+    await plan.update(updateData);
+    return plan;
+  },
+
+  async deletePlan(planId) {
+    const deletedRows = await Plan.destroy({ where: { id: planId } });
+    if (deletedRows === 0) {
+      throw new Error('Plano não encontrado.');
+    }
+    return { message: 'Plano excluído com sucesso.' };
+  },
+
+  // --- Rota para buscar todo o histórico ---
+  async getAllHistory(filters = {}) {
+    const { page = 1, limit = 10, searchTerm = '' } = filters;
+    const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+    
+    let userWhereCondition = {};
+
+    if (searchTerm) {
+      userWhereCondition = {
+        [Op.or]: [
+          { name: { [Op.iLike]: `%${searchTerm}%` } },
+          { email: { [Op.iLike]: `%${searchTerm}%` } }
+        ]
+      };
+    }
+
+    const includeConditions = [
+      { model: Assistant, as: 'assistant', attributes: ['id', 'name'] },
+      { model: User, as: 'user', attributes: ['id', 'name', 'email'] },
+      { model: Transcription, as: 'transcription', attributes: ['id', 'originalFileName'] }
+    ];
+
+    if (searchTerm) {
+      includeConditions[1].where = userWhereCondition;
+      includeConditions[1].required = true;
+    }
+
+    const { count, rows } = await AssistantHistory.findAndCountAll({
+      include: includeConditions,
+      limit: parseInt(limit, 10),
+      offset,
+      order: [['createdAt', 'DESC']],
+      attributes: { exclude: ['inputText', 'outputText'] }
+    });
+
+    return {
+      history: rows,
+      total: count,
+      totalPages: Math.ceil(count / parseInt(limit, 10)),
+      currentPage: parseInt(page, 10)
+    };
+  },
+
+
   // --- Funções de gerenciamento de Configurações Globais ---
   async listGlobalSettings() {
     return settings.listAll();
@@ -227,63 +289,6 @@ const adminService = {
       monthlyRevenue: monthlyRevenueResult || 0,
       activeSubscriptions: activeSubscriptions || 0,
       newUsersThisMonth: newUsersThisMonth || 0,
-    };
-  },
-
-   // <<< ADICIONADO: Lógica para ATUALIZAR um plano >>>
-  async updatePlan(planId, updateData) {
-    const plan = await Plan.findByPk(planId);
-    if (!plan) {
-      throw new Error('Plano não encontrado.');
-    }
-    await plan.update(updateData);
-    return plan;
-  },
-
-  // <<< ADICIONADO: Lógica para DELETAR um plano >>>
-  async deletePlan(planId) {
-    const deletedRows = await Plan.destroy({ where: { id: planId } });
-    if (deletedRows === 0) {
-      throw new Error('Plano não encontrado.');
-    }
-    return { message: 'Plano excluído com sucesso.' };
-  },
-
-  // <<< ADICIONADO: Lógica para buscar TODO o histórico >>>
-  async getAllHistory(filters = {}) {
-    const { page = 1, limit = 10, searchTerm = '' } = filters;
-    const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
-    
-    let whereCondition = {};
-    let userWhereCondition = {};
-
-    if (searchTerm) {
-      userWhereCondition = {
-        [Op.or]: [
-          { name: { [Op.iLike]: `%${searchTerm}%` } },
-          { email: { [Op.iLike]: `%${searchTerm}%` } }
-        ]
-      };
-    }
-
-    const { count, rows } = await AssistantHistory.findAndCountAll({
-      where: whereCondition,
-      include: [
-        { model: Assistant, as: 'assistant', attributes: ['id', 'name'] },
-        { model: User, as: 'user', attributes: ['id', 'name', 'email'], where: userWhereCondition, required: !!searchTerm },
-        { model: Transcription, as: 'transcription', attributes: ['id', 'originalFileName'] }
-      ],
-      limit: parseInt(limit, 10),
-      offset,
-      order: [['createdAt', 'DESC']],
-      attributes: { exclude: ['inputText', 'outputText'] }
-    });
-
-    return {
-      history: rows,
-      total: count,
-      totalPages: Math.ceil(count / parseInt(limit, 10)),
-      currentPage: parseInt(page, 10)
     };
   },
 };
