@@ -10,46 +10,36 @@ const { User, Plan, Transcription, AgentAction, Agent } = db;
 const transcriptionService = {
  async createTranscription(userId, file) {
     let transcriptionRecord;
-
     try {
-      const user = await User.findByPk(userId, {
-        include: [{ model: Plan, as: 'currentPlan' }],
-      });
-
-      if (!user) {
-        throw new Error('Usuário não encontrado.');
-      }
-
-      // <<< CORREÇÃO: Adiciona um bypass para administradores >>>
+      const user = await User.findByPk(userId, { include: [{ model: Plan, as: 'currentPlan' }] });
+      if (!user) throw new Error('Usuário não encontrado.');
+      
       if (user.role !== 'admin') {
-        if (!user.currentPlan || !user.planExpiresAt || user.planExpiresAt < new Date()) {
-          throw new Error('Você não tem um plano ativo. Por favor, adquira um plano.');
-        }
-
-        const planFeatures = user.currentPlan.features;
-
-        if (planFeatures.maxAudioTranscriptions !== -1 && user.transcriptionsUsedCount >= planFeatures.maxAudioTranscriptions) {
-          throw new Error('Limite de transcrições de áudio atingido para o seu plano.');
-        }
+          if (!user.currentPlan || !user.planExpiresAt || user.planExpiresAt < new Date()) {
+            throw new Error('Você não tem um plano ativo. Por favor, adquira um plano.');
+          }
+          const planFeatures = user.currentPlan.features;
+          if (planFeatures.maxAudioTranscriptions !== -1 && user.transcriptionsUsedCount >= planFeatures.maxAudioTranscriptions) {
+            throw new Error('Limite de transcrições de áudio atingido para o seu plano.');
+          }
       }
       
       const fileSizeInKB = Math.round(file.size / 1024);
 
       transcriptionRecord = await Transcription.create({
         userId: user.id,
+        // <<< ALTERADO: Define o 'title' inicial como o nome do arquivo >>>
+        title: file.originalname, 
         audioPath: file.path,
         originalFileName: file.originalname,
         fileSizeKB: fileSizeInKB,
         status: 'pending',
       });
-      
-      // <<< CORREÇÃO: Passa o objeto do usuário em vez das features do plano >>>
+
       this._processTranscriptionInBackground(transcriptionRecord.id, file.path, user);
-
       return transcriptionRecord;
-
     } catch (error) {
-      // ... (bloco catch permanece o mesmo)
+        // ... (código existente)
     }
   },
 
@@ -260,6 +250,41 @@ const transcriptionService = {
       include: [{ model: Agent, as: 'agent', attributes: ['name'] }],
       order: [['createdAt', 'DESC']]
     });
+  },
+
+   async updateTranscription(transcriptionId, userId, updateData) {
+    const transcription = await Transcription.findOne({ where: { id: transcriptionId, userId } });
+    if (!transcription) {
+      throw new Error('Transcrição não encontrada ou você não tem permissão para editar.');
+    }
+    // Permite apenas a atualização do título por esta rota
+    if (updateData.title !== undefined) {
+      transcription.title = updateData.title;
+    }
+    await transcription.save();
+    return transcription;
+  },
+
+  // <<< ADICIONADO: Serviço para DELETAR uma transcrição >>>
+  async deleteTranscription(transcriptionId, userId) {
+    const transcription = await Transcription.findOne({ where: { id: transcriptionId, userId } });
+    if (!transcription) {
+      throw new Error('Transcrição não encontrada ou você não tem permissão para excluir.');
+    }
+
+    // Deleta o arquivo de áudio físico se ele ainda existir
+    if (transcription.audioPath) {
+      try {
+        await fsPromises.access(transcription.audioPath); // Verifica se o arquivo existe
+        await fsPromises.unlink(transcription.audioPath); // Deleta o arquivo
+        console.log(`Arquivo de áudio ${transcription.audioPath} deletado.`);
+      } catch (fileError) {
+        console.warn(`Aviso: Não foi possível deletar o arquivo de áudio ${transcription.audioPath}. Pode já ter sido removido. Erro: ${fileError.message}`);
+      }
+    }
+
+    await transcription.destroy(); // Deleta do DB (e o CASCADE cuidará do histórico)
+    return { message: 'Transcrição e todos os dados associados foram excluídos com sucesso.' };
   },
 
 };

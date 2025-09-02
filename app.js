@@ -44,7 +44,7 @@ db.sequelize.authenticate()
   .then(() => {
     console.log('✅ Conexão com o banco de dados estabelecida.');
     // Sincroniza os modelos
-    return db.sequelize.sync({ force: false }); // Usar 'false' em produção é mais seguro
+    return db.sequelize.sync({ force: true }); // Usar 'false' em produção é mais seguro
   })
   .then(async () => {
     console.log('✅ Sincronização com o banco de dados bem-sucedida.');

@@ -23,6 +23,8 @@ router.get('/my-transcriptions/:id/audio', transcriptionController.getTranscript
 
 
 router.get('/my-transcriptions/:id/agent-actions', transcriptionController.getAgentActionsForTranscription);
+router.put('/my-transcriptions/:id', transcriptionController.updateTranscription);
+router.delete('/my-transcriptions/:id', transcriptionController.deleteTranscription);
 
 
 // Rota para obter o uso atual do plano do usuário
