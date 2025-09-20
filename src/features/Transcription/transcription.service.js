@@ -12,7 +12,9 @@ const transcriptionService = {
     let transcriptionRecord;
     try {
       const user = await User.findByPk(userId, { include: [{ model: Plan, as: 'currentPlan' }] });
-      if (!user) throw new Error('Usuário não encontrado.');
+      if (!user) {
+        throw new Error('Usuário não encontrado.');
+      }
       
       if (user.role !== 'admin') {
           if (!user.currentPlan || !user.planExpiresAt || user.planExpiresAt < new Date()) {
@@ -28,7 +30,6 @@ const transcriptionService = {
 
       transcriptionRecord = await Transcription.create({
         userId: user.id,
-        // <<< ALTERADO: Define o 'title' inicial como o nome do arquivo >>>
         title: file.originalname, 
         audioPath: file.path,
         originalFileName: file.originalname,
@@ -38,12 +39,31 @@ const transcriptionService = {
 
       this._processTranscriptionInBackground(transcriptionRecord.id, file.path, user);
       return transcriptionRecord;
+
     } catch (error) {
-        // ... (código existente)
+        // --- INÍCIO DA CORREÇÃO ---
+        console.error('[Service Error] Erro ao criar transcrição, iniciando limpeza:', error.message);
+
+        // Se o arquivo foi enviado pelo multer, ele existe em `file.path` e precisa ser removido.
+        if (file && file.path) {
+            await fsPromises.unlink(file.path).catch(err => 
+              console.warn(`Aviso: Não foi possível limpar o arquivo ${file.path} após erro.`, err)
+            );
+        }
+
+        // Se o registro no banco de dados chegou a ser criado antes do erro, remove-o.
+        if (transcriptionRecord && transcriptionRecord.id) {
+          await Transcription.destroy({ where: { id: transcriptionRecord.id } });
+        }
+
+        // **A PARTE MAIS IMPORTANTE: Relança o erro.**
+        // Isso permite que o bloco catch do controller lide com ele e envie a
+        // resposta HTTP correta (ex: 400 Bad Request) para o front-end.
+        throw error; 
+        // --- FIM DA CORREÇÃO ---
     }
   },
 
-   // <<< CORREÇÃO: A função agora recebe o objeto 'user' completo >>>
   async _processTranscriptionInBackground(transcriptionId, audioFilePath, user) {
     let transcriptionRecord;
     try {
@@ -65,7 +85,6 @@ const transcriptionService = {
       const estimatedDurationSeconds = Math.round((transcriptionRecord.fileSizeKB * 8) / 128);
       const estimatedDurationMinutes = estimatedDurationSeconds / 60;
 
-      // <<< CORREÇÃO: A verificação de limite de minutos também bypassa o admin >>>
       if (user.role !== 'admin' && user.currentPlan) {
         const planFeatures = user.currentPlan.features;
         if (planFeatures.maxTranscriptionMinutes !== -1 && (user.transcriptionMinutesUsed + estimatedDurationMinutes) > planFeatures.maxTranscriptionMinutes) {
@@ -79,7 +98,6 @@ const transcriptionService = {
         status: 'completed',
       });
       
-      // <<< CORREÇÃO: O incremento de uso só ocorre para não-admins >>>
       if (user.role !== 'admin') {
         await user.increment('transcriptionMinutesUsed', { by: estimatedDurationMinutes });
         await user.increment('transcriptionsUsedCount', { by: 1 });
@@ -265,7 +283,6 @@ const transcriptionService = {
     return transcription;
   },
 
-  // <<< ADICIONADO: Serviço para DELETAR uma transcrição >>>
   async deleteTranscription(transcriptionId, userId) {
     const transcription = await Transcription.findOne({ where: { id: transcriptionId, userId } });
     if (!transcription) {
