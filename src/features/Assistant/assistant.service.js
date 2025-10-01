@@ -200,35 +200,24 @@
           throw new Error("Assistente não sincronizado. Edite e salve o assistente para sincronizar com a OpenAI.");
         }
         
-        // <<< INÍCIO DA CORREÇÃO MINIMALISTA >>>
+        // ================== INÍCIO DA CORREÇÃO DE PERMISSÃO (Passo 1) ==================
         let openaiClient;
 
         if (assistant.isSystemAssistant) {
-            // Se é um assistente do sistema, SEMPRE usa a chave do sistema.
+            // Assistentes do sistema SEMPRE devem ser executados com a chave de API do sistema.
             if (!systemOpenai) {
                 throw new Error("Chave de API do sistema indisponível para execução.");
             }
-            console.log(`[EXECUTION] Usando chave do SISTEMA para assistente: ${assistant.name}`);
             openaiClient = systemOpenai;
         } else {
-            // Se é um assistente de usuário, SEMPRE usa a chave do CRIADOR.
-            if (!assistant.createdByUserId) {
-                throw new Error(`Assistente de usuário "${assistant.name}" não tem um criador associado.`);
-            }
-
+            // Assistentes de usuário SEMPRE devem ser executados com a chave de API do seu CRIADOR.
             const creator = await User.findByPk(assistant.createdByUserId);
-            if (!creator) {
-                throw new Error(`O criador do assistente (ID: ${assistant.createdByUserId}) não foi encontrado.`);
+            if (!creator || !creator.openAiApiKey) {
+                throw new Error(`O criador do assistente "${assistant.name}" não foi encontrado ou não possui uma chave de API configurada.`);
             }
-
-            if (!creator.openAiApiKey) {
-                throw new Error(`O criador do assistente "${assistant.name}" não possui uma chave de API da OpenAI configurada.`);
-            }
-            
-            console.log(`[EXECUTION] Usando chave do CRIADOR (ID: ${creator.id}) para assistente: ${assistant.name}`);
             openaiClient = new OpenAI({ apiKey: creator.openAiApiKey });
         }
-        // <<< FIM DA CORREÇÃO MINIMALISTA >>>
+        // ================== FIM DA CORREÇÃO DE PERMISSÃO ==================
         
         const finalOutputFormat = options.outputFormat || assistant.outputFormat;
         
@@ -239,7 +228,7 @@
           inputText: transcription.transcriptionText,
           outputFormat: finalOutputFormat,
           status: 'pending',
-          // Esta flag agora reflete se o token do sistema foi usado, não se o assistente o requeria.
+          // ================== CORREÇÃO DO REGISTRO DE USO (Passo 3) ==================
           usedSystemToken: assistant.isSystemAssistant,
         });
 
@@ -305,62 +294,107 @@
     },
 
     async _pollRunStatus(historyId, threadId, runId, openaiClient, user) {
-        console.log(`[DEBUG POLL START] historyId: ${historyId}`);
-        console.log(`[DEBUG POLL START] threadId: "${threadId}" (tipo: ${typeof threadId})`);
-        console.log(`[DEBUG POLL START] runId: "${runId}" (tipo: ${typeof runId})`);
-        
-        const startTime = Date.now();
-        const timeout = 5 * 60 * 1000;
+      console.log(`[DEBUG POLL START] historyId: ${historyId}`);
+      console.log(`[DEBUG POLL START] threadId: "${threadId}" (tipo: ${typeof threadId})`);
+      console.log(`[DEBUG POLL START] runId: "${runId}" (tipo: ${typeof runId})`);
+      console.log(`[DEBUG POLL START] openaiClient:`, !!openaiClient);
+      console.log(`[DEBUG POLL START] openaiClient.beta:`, !!openaiClient?.beta);
+      console.log(`[DEBUG POLL START] openaiClient.beta.threads:`, !!openaiClient?.beta?.threads);
+      console.log(`[DEBUG POLL START] openaiClient.beta.threads.runs:`, !!openaiClient?.beta?.threads?.runs);
+      
+      const startTime = Date.now();
+      const timeout = 5 * 60 * 1000;
 
-        while (Date.now() - startTime < timeout) {
-            try {
-                if (typeof threadId !== 'string' || !threadId.startsWith('thread_')) {
-                    throw new Error(`[Validação] ID da Thread inválido no polling: ${threadId}`);
-                }
-                if (typeof runId !== 'string' || !runId.startsWith('run_')) {
-                    throw new Error(`[Validação] ID da Run inválido no polling: ${runId}`);
-                }
-                
-                console.log(`[Polling] HistoryID: ${historyId} - Verificando status da Run: ${runId} na Thread: ${threadId}`);
+      while (Date.now() - startTime < timeout) {
+        try {
+          if (typeof threadId !== 'string' || !threadId.startsWith('thread_')) {
+            throw new Error(`[Validação] ID da Thread inválido no polling: ${threadId}`);
+          }
+          if (typeof runId !== 'string' || !runId.startsWith('run_')) {
+              throw new Error(`[Validação] ID da Run inválido no polling: ${runId}`);
+          }
+          
+          console.log(`[Polling] HistoryID: ${historyId} - Verificando status da Run: ${runId} na Thread: ${threadId}`);
+          console.log(`[DEBUG RETRIEVE] Tentativa 1 - Método direto`);
+          console.log(`[DEBUG RETRIEVE] threadId: "${threadId}", runId: "${runId}"`);
+          
+          try {
+            const runStatus = await openaiClient.beta.threads.runs.retrieve(threadId, runId);
+            console.log(`[SUCCESS] Retrieve funcionou! Status: ${runStatus.status}`);
+            
+            await AssistantHistory.update({ status: runStatus.status }, { where: { id: historyId } });
 
-                const runStatus = await openaiClient.beta.threads.runs.retrieve(threadId, runId);
-                console.log(`[SUCCESS] Retrieve funcionou! Status: ${runStatus.status}`);
-                
-                await AssistantHistory.update({ status: runStatus.status }, { where: { id: historyId } });
-
-                if (runStatus.status === 'completed') {
-                    await this._processCompletedRun(historyId, threadId, openaiClient, user);
-                    return;
-                }
-                
-                if (['failed', 'cancelled', 'expired'].includes(runStatus.status)) {
-                    const lastError = runStatus.last_error;
-                    const errorMessage = `A execução falhou com status: ${runStatus.status}. Causa: ${lastError ? lastError.message : 'Nenhuma informação adicional.'}`;
-                    console.error(`[ERRO] HistoryID: ${historyId} - ${errorMessage}`);
-                    await AssistantHistory.update({ status: 'failed', errorMessage }, { where: { id: historyId } });
-                    return;
-                }
-
-                if (runStatus.status === 'requires_action') {
-                    const errorMessage = 'A execução parou pois requer uma ação manual (ex: function calling) que não está implementada.';
-                    console.warn(`[AVISO] Run ${runId} requer ação.`, runStatus.required_action);
-                    await AssistantHistory.update({ status: 'failed', errorMessage }, { where: { id: historyId } });
-                    return;
-                }
-
-                await sleep(3000);
-
-            } catch (error) {
-                const errorMessage = error.response?.data?.error?.message || error.message;
-                console.error(`[ERRO] Exceção durante o polling [RunID: ${runId}]: ${errorMessage}`, { stack: error.stack });
-                await AssistantHistory.update({ status: 'failed', errorMessage: `Erro de comunicação com a OpenAI: ${errorMessage}` }, { where: { id: historyId } });
+            if (runStatus.status === 'completed') {
+                await this._processCompletedRun(historyId, threadId, openaiClient, user);
                 return;
             }
-        }
+            
+            if (['failed', 'cancelled', 'expired'].includes(runStatus.status)) {
+                const lastError = runStatus.last_error;
+                const errorMessage = `A execução falhou com status: ${runStatus.status}. Causa: ${lastError ? lastError.message : 'Nenhuma informação adicional.'}`;
+                console.error(`[ERRO] HistoryID: ${historyId} - ${errorMessage}`);
+                await AssistantHistory.update({ status: 'failed', errorMessage }, { where: { id: historyId } });
+                return;
+            }
 
-        const timeoutMessage = 'A execução excedeu o tempo limite de 5 minutos.';
-        console.error(`[ERRO] HistoryID: ${historyId} - ${timeoutMessage}`);
-        await AssistantHistory.update({ status: 'failed', errorMessage: timeoutMessage }, { where: { id: historyId } });
+            if (runStatus.status === 'requires_action') {
+                const errorMessage = 'A execução parou pois requer uma ação manual (ex: function calling) que não está implementada.';
+                console.warn(`[AVISO] Run ${runId} requer ação.`, runStatus.required_action);
+                await AssistantHistory.update({ status: 'failed', errorMessage }, { where: { id: historyId } });
+                return;
+            }
+
+            await sleep(3000);
+            
+          } catch (retrieveError) {
+            console.error(`[ERRO RETRIEVE] Falha na chamada retrieve:`, retrieveError.message);
+            
+            console.log(`[DEBUG] Tentativa 2 - Usando abordagem alternativa`);
+            
+            try {
+              const url = `https://api.openai.com/v1/threads/${threadId}/runs/${runId}`;
+              console.log(`[DEBUG] URL construída: ${url}`);
+              
+              const response = await fetch(url, {
+                method: 'GET',
+                headers: {
+                  'Authorization': `Bearer ${openaiClient.apiKey}`,
+                  'Content-Type': 'application/json',
+                  'OpenAI-Beta': 'assistants=v2'
+                }
+              });
+              
+              if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+              }
+              
+              const runStatus = await response.json();
+              console.log(`[SUCCESS] Fetch direto funcionou! Status: ${runStatus.status}`);
+              
+              await AssistantHistory.update({ status: runStatus.status }, { where: { id: historyId } });
+
+              if (runStatus.status === 'completed') {
+                  await this._processCompletedRun(historyId, threadId, openaiClient, user);
+                  return;
+              }
+              
+            } catch (fetchError) {
+              console.error(`[ERRO FETCH] Falha no fetch direto:`, fetchError.message);
+              throw retrieveError;
+            }
+          }
+
+        } catch (error) {
+          const errorMessage = error.response?.data?.error?.message || error.message;
+          console.error(`[ERRO] Exceção durante o polling [RunID: ${runId}]: ${errorMessage}`, { stack: error.stack });
+          await AssistantHistory.update({ status: 'failed', errorMessage: `Erro de comunicação com a OpenAI: ${errorMessage}` }, { where: { id: historyId } });
+          return;
+        }
+      }
+
+      const timeoutMessage = 'A execução excedeu o tempo limite de 5 minutos.';
+      console.error(`[ERRO] HistoryID: ${historyId} - ${timeoutMessage}`);
+      await AssistantHistory.update({ status: 'failed', errorMessage: timeoutMessage }, { where: { id: historyId } });
     },
 
     async _processCompletedRun(historyId, threadId, openaiClient, user) {
@@ -411,6 +445,18 @@
         if (!user.openAiApiKey) throw new Error('Esta ação requer sua chave de API da OpenAI.');
         return new OpenAI({ apiKey: user.openAiApiKey });
     },
+    
+    // ================== FUNÇÃO REMOVIDA (Passo 2) ==================
+    /*
+    _getOpenAIClientForExecution(user, assistant) {
+      if (user.role === 'admin' || !assistant.requiresUserOpenAiToken) {
+        if (!systemOpenai) throw new Error("Chave de API do sistema indisponível para execução.");
+        return systemOpenai;
+      }
+      if (!user.openAiApiKey) throw new Error('Este assistente requer sua chave de API OpenAI para ser executado.');
+      return new OpenAI({ apiKey: user.openAiApiKey });
+    },
+    */
 
    async _validateUserPlanForCreation(userId) {
     if (!userId) {
@@ -460,8 +506,7 @@
         if (transcription.status !== 'completed') throw new Error('A transcrição ainda não foi concluída e não pode ser usada.');
   
         if (user.role !== 'admin') {
-            // Se o assistente for do sistema, ele consome os créditos do plano do usuário.
-            if (assistant.isSystemAssistant) {
+            if (!assistant.requiresUserOpenAiToken) {
                 const plan = user.currentPlan;
                 if (!plan || user.planExpiresAt < new Date()) {
                     throw new Error('Você precisa de um plano ativo para executar assistentes.');
@@ -471,7 +516,6 @@
                     throw new Error('Você atingiu o limite de uso de assistentes do seu plano.');
                 }
             }
-            // Se o assistente for do próprio usuário, ele usa a chave do usuário e não consome créditos do plano.
         }
 
         return { user, assistant, transcription };
