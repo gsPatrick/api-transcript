@@ -1,0 +1,26 @@
+{
+  "development": {
+    "username": "transcreverbd",
+    "password": "transcreverbd",
+    "database": "transcreverbd",
+    "host": "69.62.99.122",
+    "port": 5434,
+    "dialect": "postgres"
+  },
+  "test": {
+    "username": "transcreverbd",
+    "password": "transcreverbd",
+    "database": "transcreverbd",
+    "host": "69.62.99.122",
+    "port": 5434,
+    "dialect": "postgres"
+  },
+  "production": {
+    "username": "transcreverbd",
+    "password": "transcreverbd",
+    "database": "transcreverbd",
+    "host": "69.62.99.122",
+    "port": 5434,
+    "dialect": "postgres"
+  }
+}
