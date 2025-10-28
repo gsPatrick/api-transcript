@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const { Op } = require('sequelize');
 const db = require('../../config/database');
 const cryptoUtils = require('../../utils/crypto');
-const emailService = require('../../lib/email.service'); // Serviço que criaremos
+const emailService = require('../../utils/emailService'); // Serviço que criaremos
 const User = db.User;
 
 const authService = {
