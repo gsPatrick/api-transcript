@@ -27,7 +27,6 @@ function formatMercadoPagoDate(date) {
 
 const subscriptionService = {
   /**
-   * <<< MÉTODO REESCRITO PARA CRIAR UMA ASSINATURA RECORRENTE >>>
    * Cria um checkout de assinatura recorrente no Mercado Pago.
    * @param {string} userId - ID do usuário.
    * @param {string} planId - ID do plano.
@@ -46,7 +45,6 @@ const subscriptionService = {
       if (!user) throw new Error('Usuário não encontrado.');
       if (!plan) throw new Error('Plano não encontrado.');
 
-      // Cria um registro de pedido para rastreamento interno
       const subscriptionOrder = await SubscriptionOrder.create({
         userId: user.id,
         planId: plan.id,
@@ -55,37 +53,34 @@ const subscriptionService = {
       });
       
       const priceAsFloat = parseFloat(plan.price);
-      // Data de término da assinatura (ex: 1 ano a partir de agora)
       const endDate = new Date();
       endDate.setFullYear(endDate.getFullYear() + 1);
 
-      // Payload para a API de Assinaturas (Preapproval) do Mercado Pago
       const subscriptionPayload = {
         reason: `Assinatura Mensal - Plano ${plan.name}`,
-        external_reference: subscriptionOrder.id, // Usamos o ID do nosso pedido como referência externa
+        external_reference: subscriptionOrder.id,
         payer_email: user.email,
         auto_recurring: {
           frequency: 1,
           frequency_type: "months",
           transaction_amount: priceAsFloat,
           currency_id: "BRL",
-          start_date: formatMercadoPagoDate(new Date()), // Início imediato
-          end_date: formatMercadoPagoDate(endDate), // Define até quando o MP pode tentar cobrar
+          start_date: formatMercadoPagoDate(new Date()),
+          end_date: formatMercadoPagoDate(endDate),
         },
         back_url: `${process.env.FRONTEND_URL}/dashboard?subscription_status=success`,
         notification_url: `${process.env.BACKEND_URL}/api/subscriptions/webhook`,
-        status: 'pending', // A assinatura começa pendente até o primeiro pagamento
+        status: 'pending',
       };
 
       console.log("[MercadoPago] Enviando objeto de assinatura (preapproval):", JSON.stringify(subscriptionPayload, null, 2));
 
-      // Chama a API de criação de assinatura do SDK
-      const response = await mercadopago.preapproval.create(subscriptionPayload);
+      // A CORREÇÃO ESTÁ AQUI: O payload completo deve ser passado dentro da propriedade "body".
+      const response = await mercadopago.preapproval.create({ body: subscriptionPayload });
       const responseBody = response;
 
-      // Atualiza nosso registro de pedido com o ID da assinatura do Mercado Pago
       await subscriptionOrder.update({
-        mercadopagoPreferenceId: responseBody.id, // Armazenamos o ID da pré-aprovação
+        mercadopagoPreferenceId: responseBody.id,
       });
 
       return {
@@ -100,7 +95,6 @@ const subscriptionService = {
   },
 
   /**
-   * <<< MÉTODO ATUALIZADO PARA LIDAR COM WEBHOOKS DE ASSINATURA >>>
    * Processa notificações de webhook do Mercado Pago para assinaturas.
    * @param {object} data - Dados recebidos do webhook.
    */
@@ -108,7 +102,6 @@ const subscriptionService = {
     try {
       const { type, data: webhookData } = data;
 
-      // O tópico para assinaturas é 'preapproval'
       if (type === 'preapproval') {
         const preapprovalId = webhookData.id;
         const preapprovalDetails = await mercadopago.preapproval.get(preapprovalId);
@@ -131,17 +124,15 @@ const subscriptionService = {
         }
 
         let newStatus = 'pending';
-        // Status possíveis: pending, authorized, paused, cancelled
         if (preapprovalBody.status === 'authorized') {
             newStatus = 'approved';
         } else if (preapprovalBody.status === 'cancelled' || preapprovalBody.status === 'paused') {
             newStatus = 'cancelled';
         }
 
-        // Atualiza o status do nosso pedido interno
         await subscriptionOrder.update({
           status: newStatus,
-          mercadopagoPaymentId: preapprovalId, // Reutilizamos este campo para o ID da assinatura
+          mercadopagoPaymentId: preapprovalId,
           mercadopagoPaymentDetails: preapprovalBody,
         });
 
@@ -149,13 +140,10 @@ const subscriptionService = {
         const plan = subscriptionOrder.plan;
 
         if (newStatus === 'approved' && user && plan) {
-          // Lógica de ativação/extensão do plano
           let newExpirationDate = new Date();
-          // Se o usuário já tem um plano ativo, estende a partir da data de expiração atual
           if (user.planExpiresAt && user.planExpiresAt > newExpirationDate) {
             newExpirationDate = new Date(user.planExpiresAt);
           }
-          // Adiciona a duração do plano (ex: 30 dias)
           newExpirationDate.setDate(newExpirationDate.getDate() + plan.durationInDays);
 
           await user.update({
@@ -169,10 +157,9 @@ const subscriptionService = {
           console.log(`Plano "${plan.name}" ativado/renovado para o usuário ${user.email} até ${newExpirationDate.toISOString()}`);
         
         } else if (newStatus === 'cancelled' && user) {
-            // Se a assinatura for cancelada, removemos o plano do usuário
             await user.update({
                 planId: null,
-                planExpiresAt: new Date() // Expira imediatamente
+                planExpiresAt: new Date()
             });
             console.log(`Assinatura do usuário ${user.email} foi cancelada. Plano removido.`);
         } else {
@@ -203,7 +190,6 @@ const subscriptionService = {
         return subscriptionOrder;
       }
 
-      // O ID da assinatura está em 'mercadopagoPreferenceId'
       if (subscriptionOrder.mercadopagoPreferenceId) {
         try {
           const preapproval = await mercadopago.preapproval.get(subscriptionOrder.mercadopagoPreferenceId);
@@ -258,12 +244,9 @@ const subscriptionService = {
     try {
       const { status, page = 1, limit = 10 } = filters;
       const where = {};
-
       if (userId) where.userId = userId;
       if (status) where.status = status;
-
       const offset = (page - 1) * limit;
-
       const { count, rows } = await SubscriptionOrder.findAndCountAll({
         where,
         include: [
@@ -274,7 +257,6 @@ const subscriptionService = {
         offset,
         order: [['createdAt', 'DESC']],
       });
-
       return {
         orders: rows,
         total: count,
@@ -297,12 +279,9 @@ const subscriptionService = {
       const user = await User.findByPk(userId, {
         include: [{ model: Plan, as: 'currentPlan' }],
       });
-
       if (!user) {
         throw new Error('Usuário não encontrado.');
       }
-
-      // Verifica se o plano ainda está ativo com base na data de expiração
       if (user.currentPlan && user.planExpiresAt && user.planExpiresAt > new Date()) {
         return {
           plan: user.currentPlan,
@@ -310,14 +289,10 @@ const subscriptionService = {
           remainingDays: Math.ceil((user.planExpiresAt.getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24))
         };
       }
-
-      // Se o plano expirou ou não há plano, limpa o planId e planExpiresAt do usuário
       if (user.planId) {
           await user.update({ planId: null, planExpiresAt: null });
       }
-
       return null;
-
     } catch (error) {
       console.error('Erro ao obter plano ativo do usuário:', error);
       throw error;
