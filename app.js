@@ -10,7 +10,6 @@ const cors = require('cors');
 const path = require('path');
 const cron = require('node-cron');
 const mainRouter = require('./src/routes'); // Roteador principal da API
-// <<< ADICIONADO: Importação do cryptoUtils para hashear a senha do admin >>>
 const cryptoUtils = require('./src/utils/crypto');
 
 // 3. Importa os módulos de configuração e serviços internos
@@ -56,7 +55,8 @@ db.sequelize.authenticate()
     await settings.initializeDefaultSettings([
       { key: 'MERCADO_PAGO_ACCESS_TOKEN', value: process.env.MERCADO_PAGO_ACCESS_TOKEN || '', description: 'Token de acesso do Mercado Pago', isSensitive: true },
       { key: 'OPENAI_API_KEY', value: process.env.OPENAI_API_KEY || '', description: 'Chave de API da OpenAI (para uso do sistema)', isSensitive: true },
-      // Adicione outras configurações padrão aqui se necessário
+      // <<< ADICIONADO: Configuração da chave da API do Resend >>>
+      { key: 'RESEND_API_KEY', value: process.env.RESEND_API_KEY || '', description: 'Chave de API do serviço de e-mail Resend', isSensitive: true },
     ]);
 
     // <<< INÍCIO DA LÓGICA DE CRIAÇÃO DO ADMIN PADRÃO >>>

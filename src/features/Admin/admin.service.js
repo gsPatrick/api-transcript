@@ -1,360 +1,250 @@
 // src/features/Admin/admin.service.js
-
-const db = require('../../config/database');
 const { Op } = require('sequelize');
-// <<< CORREÇÃO: Adicionado o modelo 'Transcription' à desestruturação >>>
-const { Plan, User, SubscriptionOrder, Setting, Assistant, AssistantHistory, Transcription } = db;
-const settings = require('../../config/settings');
-const mercadopago = require('../../config/mercadoPago');
-const assistantService = require('../Assistant/assistant.service'); // Importa o serviço central de Assistente
+const db = require('../../config/database');
+const cryptoUtils = require('../../utils/crypto');
+const assistantService = require('../Assistant/assistant.service');
+
+const { User, Plan, SubscriptionOrder, Agent, Assistant, Transcription, AgentAction, AssistantHistory, Setting } = db;
 
 const adminService = {
-
-  // --- Funções de gerenciamento de Usuários ---
-  async getAllUsers(filters = {}) {
-    try {
-      const { page = 1, limit = 10, searchTerm = '', planName = '' } = filters;
-      const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
-      
-      let whereCondition = {};
-      if (searchTerm) {
-        whereCondition = {
-          [Op.or]: [
-            { name: { [Op.iLike]: `%${searchTerm}%` } },
-            { email: { [Op.iLike]: `%${searchTerm}%` } }
-          ]
-        };
-      }
-
-      let includeCondition = [{
-        model: Plan,
-        as: 'currentPlan',
-        attributes: ['id', 'name'],
-        required: false
-      }];
-
-      if (planName && planName !== 'Todos' && planName !== 'Nenhum') {
-        includeCondition[0].where = { name: planName };
-        includeCondition[0].required = true;
-      } else if (planName === 'Nenhum') {
-        whereCondition.planId = { [Op.is]: null };
-      }
-
-      const { count, rows } = await User.findAndCountAll({
-        where: whereCondition,
-        include: includeCondition,
-        limit: parseInt(limit, 10),
-        offset,
-        order: [['createdAt', 'DESC']],
-        attributes: { exclude: ['password', 'openAiApiKey'] }
-      });
-
-      return {
-        users: rows,
-        total: count,
-        totalPages: Math.ceil(count / parseInt(limit, 10)),
-        currentPage: parseInt(page, 10)
-      };
-    } catch (error) {
-      console.error('[AdminService] Erro ao buscar todos os usuários:', error);
-      throw new Error('Não foi possível buscar os usuários.');
-    }
+  
+  /* Métodos de Dashboard */
+  async getDashboardStats() {
+    const totalRevenue = await SubscriptionOrder.sum('totalAmount', { where: { status: 'approved' } });
+    const startOfMonth = new Date();
+    startOfMonth.setDate(1);
+    startOfMonth.setHours(0, 0, 0, 0);
+    const monthlyRevenue = await SubscriptionOrder.sum('totalAmount', { where: { status: 'approved', createdAt: { [Op.gte]: startOfMonth } } });
+    const activeSubscriptions = await User.count({ where: { planId: { [Op.ne]: null }, planExpiresAt: { [Op.gt]: new Date() } } });
+    const newUsersThisMonth = await User.count({ where: { createdAt: { [Op.gte]: startOfMonth } } });
+    return { totalRevenue: totalRevenue || 0, monthlyRevenue: monthlyRevenue || 0, activeSubscriptions, newUsersThisMonth };
   },
 
-  async getUserById(userId) {
-    const user = await User.findByPk(userId, {
-      attributes: { exclude: ['password'] },
-      include: [{ model: Plan, as: 'currentPlan' }]
-    });
-    if (!user) {
-      throw new Error('Usuário não encontrado.');
+  /* Métodos de Gerenciamento de Usuários */
+  async getAllUsers(filters) {
+    const { page = 1, limit = 10, searchTerm, planName } = filters;
+    const where = {};
+    if (searchTerm) {
+      where[Op.or] = [
+        { name: { [Op.iLike]: `%${searchTerm}%` } },
+        { email: { [Op.iLike]: `%${searchTerm}%` } }
+      ];
     }
+    const includePlan = { model: Plan, as: 'currentPlan', where: {} };
+    if (planName && planName !== 'Todos') {
+      if (planName === 'Nenhum') {
+        where.planId = null;
+      } else {
+        includePlan.where.name = planName;
+      }
+    }
+    const { count, rows } = await User.findAndCountAll({
+      where,
+      include: [includePlan],
+      limit: parseInt(limit),
+      offset: (page - 1) * limit,
+      order: [['createdAt', 'DESC']],
+      attributes: { exclude: ['password', 'openAiApiKey', 'resetPasswordToken', 'resetPasswordExpires'] }
+    });
+    return { users: rows, total: count, totalPages: Math.ceil(count / limit), currentPage: parseInt(page) };
+  },
+
+  async updateUser(userId, data) {
+    const user = await User.findByPk(userId);
+    if (!user) throw new Error('Usuário não encontrado.');
+    // Impede a atualização direta da senha por esta rota para segurança
+    delete data.password;
+    await user.update(data);
     return user;
   },
 
-  async updateUser(userId, updateData) {
-    // Impede a atualização de campos sensíveis por esta rota
-    delete updateData.password;
-    delete updateData.role;
-
-    const [updatedRows] = await User.update(updateData, { where: { id: userId }});
-    if (updatedRows === 0) throw new Error('Usuário não encontrado ou nenhum dado para atualizar.');
-    return this.getUserById(userId);
-  },
-  
   async deleteUser(userId) {
-    const deletedRows = await User.destroy({ where: { id: userId } });
-    if (deletedRows === 0) {
-      throw new Error('Usuário não encontrado.');
-    }
-    return { message: 'Usuário excluído com sucesso.' };
+    const user = await User.findByPk(userId);
+    if (!user) throw new Error('Usuário não encontrado.');
+    await user.destroy();
+    return { message: 'Usuário deletado com sucesso.' };
   },
 
   async assignPlanToUser(userId, planId) {
     const user = await User.findByPk(userId);
     if (!user) throw new Error('Usuário não encontrado.');
-
-    if (!planId || planId === "null") {
+    if (!planId) {
       await user.update({ planId: null, planExpiresAt: null });
-      return { message: `Plano removido do usuário ${user.email} com sucesso.` };
+      return { message: 'Plano removido com sucesso.' };
     }
-
     const plan = await Plan.findByPk(planId);
     if (!plan) throw new Error('Plano não encontrado.');
-
-    const newExpirationDate = new Date();
+    let newExpirationDate = new Date();
+    // Se o usuário já tem o mesmo plano e ele ainda é válido, estende a partir da data de expiração
+    if (user.planId === planId && user.planExpiresAt > newExpirationDate) {
+      newExpirationDate = new Date(user.planExpiresAt);
+    }
     newExpirationDate.setDate(newExpirationDate.getDate() + plan.durationInDays);
-
     await user.update({
-      planId: planId,
+      planId,
       planExpiresAt: newExpirationDate,
+      // Reseta os contadores de uso
       transcriptionsUsedCount: 0,
       transcriptionMinutesUsed: 0,
-      assistantUsesUsed: 0, 
-      assistantsCreatedCount: 0,
+      agentUsesUsed: 0,
+      assistantUsesUsed: 0
     });
-    
-    return { message: `Plano ${plan.name} atribuído ao usuário ${user.email}. Expira em ${newExpirationDate.toLocaleDateString('pt-BR')}.` };
+    return { message: `Plano ${plan.name} atribuído ao usuário ${user.email} até ${newExpirationDate.toLocaleDateString()}.` };
   },
-
-  // --- Funções de gerenciamento de Planos ---
-  async createPlan(planData) {
-    return Plan.create(planData);
-  },
-
-  async getAllPlans() {
-    return Plan.findAll({ order: [['name', 'ASC']] });
-  },
-
-  async updatePlan(planId, updateData) {
-    const plan = await Plan.findByPk(planId);
-    if (!plan) {
-      throw new Error('Plano não encontrado.');
+  
+  async updateUserPassword(userId, newPassword) {
+    const user = await User.findByPk(userId);
+    if (!user) {
+      throw new Error('Usuário não encontrado.');
     }
-    await plan.update(updateData);
+
+    const hashedPassword = await cryptoUtils.hashPassword(newPassword);
+
+    await user.update({
+      password: hashedPassword,
+      resetPasswordToken: null,
+      resetPasswordExpires: null,
+    });
+
+    console.log(`Admin atualizou a senha do usuário ${user.email}.`);
+    return { message: `Senha do usuário ${user.name} atualizada com sucesso.` };
+  },
+
+  /* Métodos de Planos */
+  async getAllPlans() { return Plan.findAll({ order: [['price', 'ASC']] }); },
+  async createPlan(data) { return Plan.create(data); },
+  async updatePlan(planId, data) {
+    const plan = await Plan.findByPk(planId);
+    if (!plan) throw new Error('Plano não encontrado.');
+    await plan.update(data);
     return plan;
   },
-
   async deletePlan(planId) {
-    const deletedRows = await Plan.destroy({ where: { id: planId } });
-    if (deletedRows === 0) {
-      throw new Error('Plano não encontrado.');
-    }
-    return { message: 'Plano excluído com sucesso.' };
+    const plan = await Plan.findByPk(planId);
+    if (!plan) throw new Error('Plano não encontrado.');
+    await plan.destroy();
+    return { message: 'Plano deletado com sucesso.' };
   },
 
-  // --- Rota para buscar todo o histórico ---
-  async getAllHistory(filters = {}) {
-    const { page = 1, limit = 10, searchTerm = '' } = filters;
-    const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
-    
-    let userWhereCondition = {};
+  /* Métodos de Configurações */
+  async getAllSettings() {
+    const settings = await Setting.findAll({ order: [['key', 'ASC']] });
+    return settings.map(s => ({
+      ...s.toJSON(),
+      value: s.isSensitive ? '********' : s.value
+    }));
+  },
+  async updateSetting(key, value) {
+    const setting = await Setting.findByPk(key);
+    if (!setting) throw new Error('Configuração não encontrada.');
+    await setting.update({ value });
+    // Retorna o valor atualizado (mascarado se for sensível)
+    return { ...setting.toJSON(), value: setting.isSensitive ? '********' : value };
+  },
 
+  /* Métodos de Agentes Legados */
+  async getSystemAgents() { return Agent.findAll({ where: { isSystemAgent: true } }); },
+  async getUserCreatedAgents() { return Agent.findAll({ where: { isSystemAgent: false }, include: [{ model: User, as: 'creator', attributes: ['name', 'email'] }] }); },
+  async createSystemAgent(data) { return Agent.create({ ...data, isSystemAgent: true }); },
+  async updateSystemAgent(id, data) {
+    const agent = await Agent.findOne({ where: { id, isSystemAgent: true } });
+    if (!agent) throw new Error('Agente do sistema não encontrado.');
+    await agent.update(data);
+    return agent;
+  },
+  async deleteSystemAgent(id) {
+    const agent = await Agent.findOne({ where: { id, isSystemAgent: true } });
+    if (!agent) throw new Error('Agente do sistema não encontrado.');
+    await agent.destroy();
+    return { message: 'Agente do sistema deletado.' };
+  },
+
+  /* Métodos de Assistentes */
+  async getSystemAssistants() { return Assistant.findAll({ where: { isSystemAssistant: true } }); },
+  async getUserCreatedAssistants() { return Assistant.findAll({ where: { isSystemAssistant: false }, include: [{ model: User, as: 'creator', attributes: ['name', 'email'] }] }); },
+  async createSystemAssistant(data, files) {
+    // Chama o serviço de assistente, passando null como userId para indicar que é uma criação de admin
+    return assistantService.createAssistant(null, data, files);
+  },
+  async updateSystemAssistant(id, data, files) {
+    // Para atualizar, precisamos de um objeto de usuário simulado com a role de admin
+    const adminUser = { role: 'admin' };
+    const assistant = await Assistant.findByPk(id);
+    if (!assistant) throw new Error('Assistente não encontrado.');
+    return assistantService.updateAssistant(id, adminUser, data, files);
+  },
+  async deleteSystemAssistant(id) {
+    const adminUser = { role: 'admin' };
+    const assistant = await Assistant.findByPk(id);
+    if (!assistant) throw new Error('Assistente não encontrado.');
+    return assistantService.deleteAssistant(adminUser, id);
+  },
+
+  /* Métodos de Transcrições */
+  async getAllTranscriptions(filters) {
+    const { page = 1, limit = 10, searchTerm } = filters;
+    const where = {};
+    // Inclui o usuário associado para permitir a busca por nome/email
+    const includeUser = { model: User, as: 'user', attributes: ['name', 'email'], where: {} };
     if (searchTerm) {
-      userWhereCondition = {
-        [Op.or]: [
-          { name: { [Op.iLike]: `%${searchTerm}%` } },
-          { email: { [Op.iLike]: `%${searchTerm}%` } }
-        ]
-      };
+      const searchPattern = { [Op.iLike]: `%${searchTerm}%` };
+      where[Op.or] = [
+        { title: searchPattern },
+        { originalFileName: searchPattern },
+        // A busca em campos de tabelas associadas requer a sintaxe '$association.field$'
+        { '$user.name$': searchPattern },
+        { '$user.email$': searchPattern },
+      ];
     }
-
-    const includeConditions = [
-      { model: Assistant, as: 'assistant', attributes: ['id', 'name'] },
-      { model: User, as: 'user', attributes: ['id', 'name', 'email'] },
-      { model: Transcription, as: 'transcription', attributes: ['id', 'originalFileName'] }
-    ];
-
-    if (searchTerm) {
-      includeConditions[1].where = userWhereCondition;
-      includeConditions[1].required = true;
-    }
-
-    const { count, rows } = await AssistantHistory.findAndCountAll({
-      include: includeConditions,
-      limit: parseInt(limit, 10),
-      offset,
-      order: [['createdAt', 'DESC']],
-      attributes: { exclude: ['inputText', 'outputText'] }
-    });
-
-    return {
-      history: rows,
-      total: count,
-      totalPages: Math.ceil(count / parseInt(limit, 10)),
-      currentPage: parseInt(page, 10)
-    };
-  },
-
-
-  // --- Funções de gerenciamento de Configurações Globais ---
-  async listGlobalSettings() {
-    return settings.listAll();
-  },
-
-  async updateGlobalSetting(key, value) {
-    const updatedSetting = await settings.update(key, value);
-    if (key === 'MERCADO_PAGO_ACCESS_TOKEN') mercadopago.configure();
-    return updatedSetting;
-  },
-
-  // --- Funções de Gerenciamento de Assistentes (Sistema) ---
-  async createSystemAssistant(assistantData, files) {
-    const adminUser = { role: 'admin' }; // Simula um usuário admin para passar nas verificações de permissão do service
-    
-    const enrichedData = {
-      ...assistantData,
-      isSystemAssistant: true,
-      createdByUserId: null,
-    };
-    
-    const newAssistant = await assistantService.createAssistant(null, enrichedData, files);
-    
-    if (assistantData.planSpecific && Array.isArray(assistantData.allowedPlanIds)) {
-      const plans = await Plan.findAll({ where: { id: assistantData.allowedPlanIds } });
-      await newAssistant.setAllowedPlans(plans);
-    }
-    
-    return Assistant.findByPk(newAssistant.id, {
-      include: [{ model: Plan, as: 'allowedPlans', attributes: ['id', 'name'] }]
-    });
-  },
-
-  async getAllSystemAssistants() {
-    return Assistant.findAll({
-      where: { isSystemAssistant: true },
-      include: [{ model: Plan, as: 'allowedPlans', attributes: ['id', 'name'], through: { attributes: [] } }],
-      order: [['name', 'ASC']]
-    });
-  },
-
-  async getSystemAssistantById(assistantId) {
-    const assistant = await Assistant.findOne({
-      where: { id: assistantId, isSystemAssistant: true },
-      include: [{ model: Plan, as: 'allowedPlans', attributes: ['id', 'name'], through: { attributes: [] } }],
-    });
-    if (!assistant) throw new Error('Assistente do sistema não encontrado.');
-    return assistant;
-  },
-
-  async updateSystemAssistant(assistantId, updateData, newFiles, filesToRemoveIds) {
-    const assistant = await Assistant.findByPk(assistantId);
-    if (!assistant || !assistant.isSystemAssistant) throw new Error('Assistente do sistema não encontrado.');
-
-    const updatedAssistant = await assistantService.updateAssistant(assistantId, null, updateData, newFiles, filesToRemoveIds);
-
-    if (updateData.planSpecific !== undefined) {
-        const plans = (updateData.planSpecific === 'true' || updateData.planSpecific === true) && Array.isArray(updateData.allowedPlanIds) 
-            ? await Plan.findAll({ where: { id: updateData.allowedPlanIds } }) 
-            : [];
-        await updatedAssistant.setAllowedPlans(plans);
-    }
-    
-    return Assistant.findByPk(updatedAssistant.id, {
-      include: [{ model: Plan, as: 'allowedPlans', attributes: ['id', 'name'] }]
-    });
-  },
-
-  async deleteSystemAssistant(assistantId) {
-    const assistant = await Assistant.findByPk(assistantId);
-    if (!assistant || !assistant.isSystemAssistant) throw new Error('Assistente do sistema não encontrado.');
-    
-    await assistantService.deleteAssistant(null, assistantId);
-    
-    return { message: 'Assistente do sistema excluído com sucesso.' };
-  },
-
-  async getAllUserCreatedAssistants() {
-    return Assistant.findAll({
-      where: { isSystemAssistant: false },
-      include: [{ model: User, as: 'creator', attributes: ['id', 'name', 'email'] }],
-      order: [['createdAt', 'DESC']],
-    });
-  },
-
-  // --- Funções de Dashboard ---
-  async getDashboardStats() {
-    const now = new Date();
-    const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-
-    const totalRevenueResult = await SubscriptionOrder.sum('totalAmount', { where: { status: 'approved' }});
-    const monthlyRevenueResult = await SubscriptionOrder.sum('totalAmount', {
-      where: { status: 'approved', createdAt: { [Op.gte]: firstDayOfMonth } },
-    });
-    const activeSubscriptions = await User.count({ where: { planId: { [Op.ne]: null }, planExpiresAt: { [Op.gt]: now } } });
-    const newUsersThisMonth = await User.count({ where: { createdAt: { [Op.gte]: firstDayOfMonth } } });
-
-    return {
-      totalRevenue: totalRevenueResult || 0,
-      monthlyRevenue: monthlyRevenueResult || 0,
-      activeSubscriptions: activeSubscriptions || 0,
-      newUsersThisMonth: newUsersThisMonth || 0,
-    };
-  },
-
-  // <<< ADICIONADO: Funções para Gerenciamento de Transcrições pelo Admin >>>
-  async getAllTranscriptions(filters = {}) {
-    const { page = 1, limit = 10, searchTerm = '' } = filters;
-    const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
-
-    let whereCondition = {};
-    if (searchTerm) {
-      whereCondition = {
-        [Op.or]: [
-          { title: { [Op.iLike]: `%${searchTerm}%` } },
-          { originalFileName: { [Op.iLike]: `%${searchTerm}%` } },
-          { '$user.name$': { [Op.iLike]: `%${searchTerm}%` } },
-          { '$user.email$': { [Op.iLike]: `%${searchTerm}%` } },
-        ],
-      };
-    }
-
     const { count, rows } = await Transcription.findAndCountAll({
-      where: whereCondition,
-      include: [{ model: User, as: 'user', attributes: ['id', 'name', 'email'] }],
-      limit: parseInt(limit, 10),
-      offset,
+      where,
+      include: [includeUser],
+      subQuery: false, // Necessário para buscas em associações com limit/offset
+      limit: parseInt(limit),
+      offset: (page - 1) * limit,
       order: [['createdAt', 'DESC']],
-      attributes: { exclude: ['transcriptionText', 'audioPath'] },
     });
-
-    return {
-      transcriptions: rows,
-      total: count,
-      totalPages: Math.ceil(count / parseInt(limit, 10)),
-      currentPage: parseInt(page, 10),
-    };
+    return { transcriptions: rows, total: count, totalPages: Math.ceil(count / limit), currentPage: parseInt(page) };
   },
-
-  async updateTranscription(transcriptionId, updateData) {
-    const transcription = await Transcription.findByPk(transcriptionId);
-    if (!transcription) {
-      throw new Error('Transcrição não encontrada.');
-    }
-    // Admin pode atualizar o título ou outros campos se necessário no futuro
-    if (updateData.title !== undefined) {
-      transcription.title = updateData.title;
-    }
-    await transcription.save();
+  async updateTranscription(id, data) {
+    const transcription = await Transcription.findByPk(id);
+    if (!transcription) throw new Error('Transcrição não encontrada.');
+    await transcription.update(data);
     return transcription;
   },
-
-  async deleteTranscription(transcriptionId) {
-    // Reutiliza a lógica do serviço de transcrição do usuário, mas sem a verificação de 'userId'
-    const transcription = await Transcription.findByPk(transcriptionId);
-    if (!transcription) {
-      throw new Error('Transcrição não encontrada.');
-    }
-    if (transcription.audioPath) {
-      try {
-        await fsPromises.unlink(transcription.audioPath);
-      } catch (err) {
-        console.warn(`Admin Deletion: Could not delete audio file ${transcription.audioPath}. It may have been already removed.`);
-      }
-    }
+  async deleteTranscription(id) {
+    const transcription = await Transcription.findByPk(id);
+    if (!transcription) throw new Error('Transcrição não encontrada.');
     await transcription.destroy();
-    return { message: 'Transcrição e dados associados foram excluídos com sucesso.' };
+    return { message: 'Transcrição deletada com sucesso.' };
   },
+
+  /* Métodos de Histórico */
+  async getAllHistory(filters) {
+    const { page = 1, limit = 10, searchTerm } = filters;
+    const where = {};
+    const includeUser = { model: User, as: 'user', attributes: ['name', 'email'], where: {} };
+    if (searchTerm) {
+      const searchPattern = { [Op.iLike]: `%${searchTerm}%` };
+      includeUser.where[Op.or] = [
+        { name: searchPattern },
+        { email: searchPattern },
+      ];
+    }
+    const { count, rows } = await AssistantHistory.findAndCountAll({
+      where,
+      include: [
+        includeUser,
+        { model: Assistant, as: 'assistant', attributes: ['name'] },
+        { model: Transcription, as: 'transcription', attributes: ['originalFileName'] }
+      ],
+      subQuery: false,
+      limit: parseInt(limit),
+      offset: (page - 1) * limit,
+      order: [['createdAt', 'DESC']],
+    });
+    return { history: rows, total: count, totalPages: Math.ceil(count / limit), currentPage: parseInt(page) };
+  }
 };
 
 module.exports = adminService;

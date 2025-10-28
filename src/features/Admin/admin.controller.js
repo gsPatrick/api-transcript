@@ -1,21 +1,28 @@
 // src/features/Admin/admin.controller.js
-
 const adminService = require('./admin.service');
+const multer = require('multer');
+const upload = multer(); // Usado para o upload de arquivos de assistentes
 
 const adminController = {
-  // --- Controladores de Usuários ---
+  /* Métodos de Dashboard */
+  async getDashboardStats(req, res, next) {
+    try {
+      const stats = await adminService.getDashboardStats();
+      res.status(200).json(stats);
+    } catch (error) { next(error); }
+  },
+
+  /* Métodos de Gerenciamento de Usuários */
   async getAllUsers(req, res, next) {
     try {
       const result = await adminService.getAllUsers(req.query);
       res.status(200).json(result);
-    } catch (error) {
-      next(error);
-    }
+    } catch (error) { next(error); }
   },
 
-  async getUserById(req, res, next) {
+  async updateUser(req, res, next) {
     try {
-      const user = await adminService.getUserById(req.params.id);
+      const user = await adminService.updateUser(req.params.id, req.body);
       res.status(200).json(user);
     } catch (error) {
       if (error.message.includes('não encontrado')) return res.status(404).json({ message: error.message });
@@ -23,15 +30,26 @@ const adminController = {
     }
   },
 
-  async updateUser(req, res, next) {
+  // <<< NOVO MÉTODO PARA ATUALIZAR SENHA PELO ADMIN >>>
+  async updateUserPassword(req, res, next) {
     try {
-      const updatedUser = await adminService.updateUser(req.params.id, req.body);
-      res.status(200).json({ message: 'Usuário atualizado com sucesso!', user: updatedUser });
+      const { id } = req.params;
+      const { newPassword } = req.body;
+
+      if (!newPassword || newPassword.length < 6) {
+        return res.status(400).json({ message: 'A nova senha é obrigatória e deve ter no mínimo 6 caracteres.' });
+      }
+
+      const result = await adminService.updateUserPassword(id, newPassword);
+      res.status(200).json(result);
     } catch (error) {
-      if (error.message.includes('não encontrado')) return res.status(404).json({ message: error.message });
+      if (error.message.includes('não encontrado')) {
+        return res.status(404).json({ message: error.message });
+      }
       next(error);
     }
   },
+  // <<< FIM DO NOVO MÉTODO >>>
 
   async deleteUser(req, res, next) {
     try {
@@ -46,7 +64,6 @@ const adminController = {
   async assignPlanToUser(req, res, next) {
     try {
       const { userId, planId } = req.body;
-      if (!userId) return res.status(400).json({ message: 'ID do usuário é obrigatório.' });
       const result = await adminService.assignPlanToUser(userId, planId);
       res.status(200).json(result);
     } catch (error) {
@@ -55,205 +72,138 @@ const adminController = {
     }
   },
 
-  // --- Controladores de Planos ---
-  async createPlan(req, res, next) {
-    try {
-      const newPlan = await adminService.createPlan(req.body);
-      res.status(201).json(newPlan);
-    } catch (error) {
-      next(error);
-    }
-  },
-
+  /* Métodos de Gerenciamento de Planos */
   async getAllPlans(req, res, next) {
     try {
       const plans = await adminService.getAllPlans();
       res.status(200).json(plans);
-    } catch (error) {
-      next(error);
-    }
+    } catch (error) { next(error); }
   },
-  
-  // --- Rota para Estatísticas do Dashboard ---
-  async getDashboardStats(req, res, next) {
+  async createPlan(req, res, next) {
     try {
-      const stats = await adminService.getDashboardStats();
-      res.status(200).json(stats);
-    } catch (error) {
-      next(error);
-    }
+      const plan = await adminService.createPlan(req.body);
+      res.status(201).json(plan);
+    } catch (error) { next(error); }
   },
-
-  // --- Rotas para Gerenciamento de Configurações Globais ---
-  async listSettings(req, res, next) {
-    try {
-      const settingsList = await adminService.listGlobalSettings();
-      res.status(200).json(settingsList);
-    } catch (error) {
-      next(error);
-    }
-  },
-
-  async updateSetting(req, res, next) {
-    try {
-      const { key } = req.params;
-      const { value } = req.body;
-      if (value === undefined) return res.status(400).json({ message: 'O campo "value" é obrigatório.' });
-      const updatedSetting = await adminService.updateGlobalSetting(key, value);
-      res.status(200).json({ message: 'Configuração atualizada com sucesso.', setting: updatedSetting });
-    } catch (error) {
-      next(error);
-    }
-  },
-
-  // --- Controladores de Assistentes (Sistema) ---
-  async createSystemAssistant(req, res, next) {
-    try {
-      const assistantData = req.body;
-      const files = req.files || [];
-
-      // Faz o "parse" dos campos que foram enviados como strings JSON
-      try {
-        if (assistantData.runConfiguration) assistantData.runConfiguration = JSON.parse(assistantData.runConfiguration);
-        if (assistantData.allowedPlanIds) assistantData.allowedPlanIds = JSON.parse(assistantData.allowedPlanIds);
-      } catch (e) {
-        return res.status(400).json({ message: 'Dados de configuração (runConfiguration, allowedPlanIds) inválidos.' });
-      }
-      
-      const newAssistant = await adminService.createSystemAssistant(assistantData, files);
-      res.status(201).json(newAssistant);
-    } catch (error) {
-      next(error);
-    }
-  },
-
-  async getAllSystemAssistants(req, res, next) {
-    try {
-      const assistants = await adminService.getAllSystemAssistants();
-      res.status(200).json(assistants);
-    } catch (error) {
-      next(error);
-    }
-  },
-
-  async getSystemAssistantById(req, res, next) {
-    try {
-      const assistant = await adminService.getSystemAssistantById(req.params.id);
-      res.status(200).json(assistant);
-    } catch (error) {
-      if (error.message.includes('não encontrado')) return res.status(404).json({ message: error.message });
-      next(error);
-    }
-  },
-
-  async updateSystemAssistant(req, res, next) {
-    try {
-      const { id } = req.params;
-      const updateData = req.body;
-      const newFiles = req.files || [];
-      let filesToRemoveIds = [];
-
-      // Faz o "parse" dos campos que foram enviados como strings JSON
-      try {
-        if (updateData.runConfiguration) updateData.runConfiguration = JSON.parse(updateData.runConfiguration);
-        if (updateData.allowedPlanIds) updateData.allowedPlanIds = JSON.parse(updateData.allowedPlanIds);
-        if (updateData.filesToRemoveIds) filesToRemoveIds = JSON.parse(updateData.filesToRemoveIds);
-      } catch (e) {
-        return res.status(400).json({ message: 'Dados de configuração (runConfiguration, allowedPlanIds, filesToRemoveIds) inválidos.' });
-      }
-      
-      delete updateData.filesToRemoveIds; // Remove do objeto principal para não ser passado ao service
-
-      const updatedAssistant = await adminService.updateSystemAssistant(id, updateData, newFiles, filesToRemoveIds);
-      res.status(200).json(updatedAssistant);
-    } catch (error) {
-      if (error.message.includes('não encontrado')) return res.status(404).json({ message: error.message });
-      next(error);
-    }
-  },
-
-  async deleteSystemAssistant(req, res, next) {
-    try {
-      const result = await adminService.deleteSystemAssistant(req.params.id);
-      res.status(200).json(result);
-    } catch (error) {
-      if (error.message.includes('não encontrado')) return res.status(404).json({ message: error.message });
-      next(error);
-    }
-  },
-  
-  async getAllUserCreatedAssistants(req, res, next) {
-    try {
-      const assistants = await adminService.getAllUserCreatedAssistants();
-      res.status(200).json(assistants);
-    } catch (error) {
-      next(error);
-    }
-  },
-
-  // <<< ADICIONADO: Controlador para ATUALIZAR um plano >>>
   async updatePlan(req, res, next) {
     try {
-      const updatedPlan = await adminService.updatePlan(req.params.id, req.body);
-      res.status(200).json(updatedPlan);
-    } catch (error) {
-      if (error.message.includes('não encontrado')) return res.status(404).json({ message: error.message });
-      next(error);
-    }
+      const plan = await adminService.updatePlan(req.params.id, req.body);
+      res.status(200).json(plan);
+    } catch (error) { next(error); }
   },
-
-  // <<< ADICIONADO: Controlador para DELETAR um plano >>>
   async deletePlan(req, res, next) {
     try {
       const result = await adminService.deletePlan(req.params.id);
       res.status(200).json(result);
-    } catch (error) {
-      if (error.message.includes('não encontrado')) return res.status(404).json({ message: error.message });
-      next(error);
-    }
+    } catch (error) { next(error); }
   },
 
-  // <<< ADICIONADO: Controlador para listar TODO o histórico >>>
-  async getAllHistory(req, res, next) {
+  /* Métodos de Gerenciamento de Configurações */
+  async getAllSettings(req, res, next) {
     try {
-      const result = await adminService.getAllHistory(req.query);
+      const settings = await adminService.getAllSettings();
+      res.status(200).json(settings);
+    } catch (error) { next(error); }
+  },
+  async updateSetting(req, res, next) {
+    try {
+      const setting = await adminService.updateSetting(req.params.key, req.body.value);
+      res.status(200).json({ message: 'Configuração atualizada com sucesso!', setting });
+    } catch (error) { next(error); }
+  },
+  
+  /* Métodos de Gerenciamento de Agentes (Legado) */
+  async getSystemAgents(req, res, next) {
+    try {
+      const agents = await adminService.getSystemAgents();
+      res.status(200).json(agents);
+    } catch (error) { next(error); }
+  },
+  async getUserCreatedAgents(req, res, next) {
+    try {
+      const agents = await adminService.getUserCreatedAgents();
+      res.status(200).json(agents);
+    } catch (error) { next(error); }
+  },
+  async createSystemAgent(req, res, next) {
+    try {
+      const agent = await adminService.createSystemAgent(req.body);
+      res.status(201).json(agent);
+    } catch (error) { next(error); }
+  },
+  async updateSystemAgent(req, res, next) {
+    try {
+      const agent = await adminService.updateSystemAgent(req.params.id, req.body);
+      res.status(200).json(agent);
+    } catch (error) { next(error); }
+  },
+  async deleteSystemAgent(req, res, next) {
+    try {
+      const result = await adminService.deleteSystemAgent(req.params.id);
       res.status(200).json(result);
-    } catch (error) {
-      next(error);
-    }
+    } catch (error) { next(error); }
   },
 
-   // <<< ADICIONADO: Controladores para Gerenciamento de Transcrições >>>
+  /* Métodos de Gerenciamento de Assistentes */
+  async getSystemAssistants(req, res, next) {
+    try {
+      const assistants = await adminService.getSystemAssistants();
+      res.status(200).json(assistants);
+    } catch (error) { next(error); }
+  },
+  async getUserCreatedAssistants(req, res, next) {
+    try {
+      const assistants = await adminService.getUserCreatedAssistants();
+      res.status(200).json(assistants);
+    } catch (error) { next(error); }
+  },
+  async createSystemAssistant(req, res, next) {
+    try {
+      // O middleware multer (upload.array('knowledgeFiles')) deve ser usado na rota
+      const assistant = await adminService.createSystemAssistant(req.body, req.files);
+      res.status(201).json(assistant);
+    } catch (error) { next(error); }
+  },
+  async updateSystemAssistant(req, res, next) {
+    try {
+      const assistant = await adminService.updateSystemAssistant(req.params.id, req.body, req.files);
+      res.status(200).json(assistant);
+    } catch (error) { next(error); }
+  },
+  async deleteSystemAssistant(req, res, next) {
+    try {
+      const result = await adminService.deleteSystemAssistant(req.params.id);
+      res.status(200).json(result);
+    } catch (error) { next(error); }
+  },
+
+  /* Métodos de Gerenciamento de Transcrições */
   async getAllTranscriptions(req, res, next) {
     try {
       const result = await adminService.getAllTranscriptions(req.query);
       res.status(200).json(result);
-    } catch (error) {
-      next(error);
-    }
+    } catch (error) { next(error); }
   },
-
   async updateTranscription(req, res, next) {
     try {
-      const updated = await adminService.updateTranscription(req.params.id, req.body);
-      res.status(200).json(updated);
-    } catch (error) {
-      if (error.message.includes('não encontrada')) return res.status(404).json({ message: error.message });
-      next(error);
-    }
+      const transcription = await adminService.updateTranscription(req.params.id, req.body);
+      res.status(200).json(transcription);
+    } catch (error) { next(error); }
   },
-
   async deleteTranscription(req, res, next) {
     try {
       const result = await adminService.deleteTranscription(req.params.id);
       res.status(200).json(result);
-    } catch (error) {
-      if (error.message.includes('não encontrada')) return res.status(404).json({ message: error.message });
-      next(error);
-    }
+    } catch (error) { next(error); }
   },
 
+  /* Métodos de Gerenciamento de Histórico */
+  async getAllHistory(req, res, next) {
+    try {
+      const result = await adminService.getAllHistory(req.query);
+      res.status(200).json(result);
+    } catch (error) { next(error); }
+  }
 };
-
 
 module.exports = adminController;

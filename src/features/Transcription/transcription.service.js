@@ -8,7 +8,7 @@ const path = require('path');
 const { User, Plan, Transcription, AgentAction, Agent } = db;
 
 const transcriptionService = {
- async createTranscription(userId, file) {
+  async createTranscription(userId, file) {
     let transcriptionRecord;
     try {
       const user = await User.findByPk(userId, { include: [{ model: Plan, as: 'currentPlan' }] });
@@ -41,26 +41,16 @@ const transcriptionService = {
       return transcriptionRecord;
 
     } catch (error) {
-        // --- INÍCIO DA CORREÇÃO ---
         console.error('[Service Error] Erro ao criar transcrição, iniciando limpeza:', error.message);
-
-        // Se o arquivo foi enviado pelo multer, ele existe em `file.path` e precisa ser removido.
         if (file && file.path) {
             await fsPromises.unlink(file.path).catch(err => 
               console.warn(`Aviso: Não foi possível limpar o arquivo ${file.path} após erro.`, err)
             );
         }
-
-        // Se o registro no banco de dados chegou a ser criado antes do erro, remove-o.
         if (transcriptionRecord && transcriptionRecord.id) {
           await Transcription.destroy({ where: { id: transcriptionRecord.id } });
         }
-
-        // **A PARTE MAIS IMPORTANTE: Relança o erro.**
-        // Isso permite que o bloco catch do controller lide com ele e envie a
-        // resposta HTTP correta (ex: 400 Bad Request) para o front-end.
         throw error; 
-        // --- FIM DA CORREÇÃO ---
     }
   },
 
@@ -222,39 +212,56 @@ const transcriptionService = {
     }
   },
   
+  /**
+   * <<< MÉTODO REVISADO E ROBUSTECIDO >>>
+   * Tarefa agendada para verificar planos expirados e resetar contadores de uso.
+   */
   async resetUserUsageAndPlanExpiration() {
+    console.log('[CRON JOB] Iniciando verificação de expiração de planos...');
     try {
       const now = new Date();
       const users = await User.findAll({
-        include: [{ model: Plan, as: 'currentPlan' }],
+        where: { planId: { [db.Sequelize.Op.ne]: null } }, // Otimização: busca apenas usuários que têm um plano
       });
 
+      console.log(`[CRON JOB] ${users.length} usuários com planos encontrados para verificação.`);
+
       for (const user of users) {
-        let updateData = {};
-        
-        if (user.planId && user.planExpiresAt && user.planExpiresAt <= now) {
-          console.log(`Plano do usuário ${user.email} expirou. Resetando uso.`);
-          updateData = {
-            planId: null,
-            planExpiresAt: null,
-            transcriptionsUsedCount: 0,
-            transcriptionMinutesUsed: 0,
-            agentUsesUsed: 0,
-            userAgentsCreatedCount: 0,
-            lastAgentCreationResetDate: null,
-            assistantUsesUsed: 0,
-            assistantsCreatedCount: 0,
-            lastAssistantCreationResetDate: null,
-          };
-        }
-        
-        if (Object.keys(updateData).length > 0) {
-          await user.update(updateData);
+        try {
+          // Verifica se o usuário tem um plano e se a data de expiração já passou
+          if (user.planId && user.planExpiresAt && user.planExpiresAt <= now) {
+            
+            console.log(`[CRON JOB] PLANO EXPIRADO! Usuário: ${user.email} (ID: ${user.id}). Plano expirou em: ${user.planExpiresAt.toISOString()}`);
+            
+            const updateData = {
+              planId: null,
+              planExpiresAt: null,
+              // Reseta todos os contadores de uso
+              transcriptionsUsedCount: 0,
+              transcriptionMinutesUsed: 0,
+              agentUsesUsed: 0,
+              userAgentsCreatedCount: 0,
+              lastAgentCreationResetDate: null,
+              assistantUsesUsed: 0,
+              assistantsCreatedCount: 0,
+              lastAssistantCreationResetDate: null,
+            };
+
+            await user.update(updateData);
+            console.log(`[CRON JOB] Usuário ${user.email} teve seu plano e contadores resetados.`);
+
+          } else {
+            // Log para confirmar que o usuário foi verificado e está com o plano ativo
+            console.log(`[CRON JOB] Plano ATIVO. Usuário: ${user.email}. Vence em: ${user.planExpiresAt.toISOString()}`);
+          }
+        } catch (userError) {
+          // Se houver erro em um usuário, loga o erro e continua para o próximo
+          console.error(`[CRON JOB] Erro ao processar o usuário ${user.email} (ID: ${user.id}):`, userError);
         }
       }
-      console.log(`Tarefa de verificação de planos e uso concluída. ${users.length} usuários processados.`);
+      console.log(`[CRON JOB] Verificação de expiração de planos concluída.`);
     } catch (error) {
-      console.error('Erro na tarefa agendada de reset de uso:', error);
+      console.error('[CRON JOB] Erro crítico ao buscar usuários para a tarefa de expiração:', error);
     }
   },
 
@@ -275,7 +282,6 @@ const transcriptionService = {
     if (!transcription) {
       throw new Error('Transcrição não encontrada ou você não tem permissão para editar.');
     }
-    // Permite apenas a atualização do título por esta rota
     if (updateData.title !== undefined) {
       transcription.title = updateData.title;
     }
@@ -289,18 +295,17 @@ const transcriptionService = {
       throw new Error('Transcrição não encontrada ou você não tem permissão para excluir.');
     }
 
-    // Deleta o arquivo de áudio físico se ele ainda existir
     if (transcription.audioPath) {
       try {
-        await fsPromises.access(transcription.audioPath); // Verifica se o arquivo existe
-        await fsPromises.unlink(transcription.audioPath); // Deleta o arquivo
+        await fsPromises.access(transcription.audioPath);
+        await fsPromises.unlink(transcription.audioPath);
         console.log(`Arquivo de áudio ${transcription.audioPath} deletado.`);
       } catch (fileError) {
         console.warn(`Aviso: Não foi possível deletar o arquivo de áudio ${transcription.audioPath}. Pode já ter sido removido. Erro: ${fileError.message}`);
       }
     }
 
-    await transcription.destroy(); // Deleta do DB (e o CASCADE cuidará do histórico)
+    await transcription.destroy();
     return { message: 'Transcrição e todos os dados associados foram excluídos com sucesso.' };
   },
 

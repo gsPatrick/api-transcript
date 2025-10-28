@@ -21,10 +21,21 @@ module.exports = (sequelize) => {
     userAgentsCreatedCount: { type: DataTypes.INTEGER, defaultValue: 0, allowNull: false },
     lastAgentCreationResetDate: { type: DataTypes.DATE, allowNull: true },
 
-    // <<< NOVOS CONTADORES PARA ASSISTENTES >>>
+    // Contadores para Assistentes
     assistantUsesUsed: { type: DataTypes.INTEGER, defaultValue: 0, allowNull: false },
     assistantsCreatedCount: { type: DataTypes.INTEGER, defaultValue: 0, allowNull: false },
     lastAssistantCreationResetDate: { type: DataTypes.DATE, allowNull: true },
+
+    // <<< NOVOS CAMPOS PARA REDEFINIÇÃO DE SENHA >>>
+    resetPasswordToken: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    resetPasswordExpires: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    // <<< FIM DOS NOVOS CAMPOS >>>
 
   }, {
     tableName: 'users',

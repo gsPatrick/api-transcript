@@ -1,19 +1,19 @@
 // src/config/mercadoPago.js
 
-const { MercadoPagoConfig, Preference, Payment } = require('mercadopago');
+const { MercadoPagoConfig, Preference, Payment, PreApproval } = require('mercadopago'); // <<< ADICIONADO PreApproval
 
 const mercadopagoServices = {
   client: null,
   preferences: null,
   payment: null,
+  preapproval: null, // <<< ADICIONADO
   isConfigured: false,
 
   configure: () => {
-    // CORREÇÃO: Lê o token da variável de ambiente
     const accessToken = process.env.MERCADO_PAGO_ACCESS_TOKEN;
     
     if (!accessToken) {
-      console.error('[MercadoPago] ERRO CRÍTICO: MERCADO_PAGO_ACCESS_TOKEN não foi encontrada nas variáveis de ambiente. O serviço de pagamento estará desativado.');
+      console.error('[MercadoPago] ERRO CRÍTICO: MERCADO_PAGO_ACCESS_TOKEN não foi encontrada. O serviço de pagamento estará desativado.');
       mercadopagoServices.isConfigured = false;
       return;
     }
@@ -29,6 +29,7 @@ const mercadopagoServices = {
       mercadopagoServices.client = client;
       mercadopagoServices.preferences = new Preference(client);
       mercadopagoServices.payment = new Payment(client);
+      mercadopagoServices.preapproval = new PreApproval(client); // <<< ADICIONADO
       mercadopagoServices.isConfigured = true;
 
       console.log('✅ [MercadoPago] SDK configurado com sucesso.');
