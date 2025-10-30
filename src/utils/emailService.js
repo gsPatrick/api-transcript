@@ -42,7 +42,8 @@ const emailService = {
 
     try {
       await resend.emails.send({
-        from: 'CondutaMedX <onboarding@resend.dev>', // Em produção, use um domínio verificado no Resend.
+        // <<< ALTERADO: O remetente agora usa seu domínio verificado >>>
+        from: 'CondutaMedX <nao-responda@condutamedx.com.br>',
         to: [to],
         subject: subject,
         html: htmlBody,
@@ -71,7 +72,8 @@ const emailService = {
 
     try {
       await resend.emails.send({
-        from: 'Onboarding <onboarding@resend.dev>', // Use um domínio verificado no Resend em produção
+        // <<< ALTERADO: O remetente agora usa seu domínio verificado >>>
+        from: 'CondutaMedX <nao-responda@condutamedx.com.br>',
         to: [to],
         subject: subject,
         html: htmlBody,
