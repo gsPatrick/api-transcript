@@ -21,9 +21,11 @@ const adminService = {
   },
 
   /* Métodos de Gerenciamento de Usuários */
-  async getAllUsers(filters) {
+async getAllUsers(filters) {
+    // <<< MUDANÇA AQUI: Extraímos o 'limit' para tratá-lo >>>
     const { page = 1, limit = 10, searchTerm, planName } = filters;
     const where = {};
+
     if (searchTerm) {
       where[Op.or] = [
         { name: { [Op.iLike]: `%${searchTerm}%` } },
@@ -38,15 +40,43 @@ const adminService = {
         includePlan.where.name = planName;
       }
     }
-    const { count, rows } = await User.findAndCountAll({
+    
+    // <<< MUDANÇA AQUI: Criamos um objeto de opções para a query >>>
+    const queryOptions = {
       where,
       include: [includePlan],
-      limit: parseInt(limit),
-      offset: (page - 1) * limit,
       order: [['createdAt', 'DESC']],
       attributes: { exclude: ['password', 'openAiApiKey', 'resetPasswordToken', 'resetPasswordExpires'] }
-    });
-    return { users: rows, total: count, totalPages: Math.ceil(count / limit), currentPage: parseInt(page) };
+    };
+
+    // <<< MUDANÇA PRINCIPAL AQUI: Se o limit não for 'all', aplicamos paginação >>>
+    // Isso nos dá flexibilidade para reativar a paginação no futuro se precisarmos.
+    if (limit !== 'all') {
+      const numericLimit = parseInt(limit, 10);
+      const numericPage = parseInt(page, 10);
+      queryOptions.limit = numericLimit;
+      queryOptions.offset = (numericPage - 1) * numericLimit;
+    }
+
+    const { count, rows } = await User.findAndCountAll(queryOptions);
+
+    // Se a paginação foi desativada, a resposta não precisa ter informações de página.
+    if (limit === 'all') {
+      return {
+        users: rows,
+        total: count,
+        totalPages: 1,
+        currentPage: 1
+      };
+    }
+
+    // A lógica original é mantida para quando a paginação estiver ativa.
+    return { 
+        users: rows, 
+        total: count, 
+        totalPages: Math.ceil(count / parseInt(limit)), 
+        currentPage: parseInt(page) 
+    };
   },
 
   async updateUser(userId, data) {
