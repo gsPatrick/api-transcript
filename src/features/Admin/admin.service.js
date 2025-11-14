@@ -21,62 +21,30 @@ const adminService = {
   },
 
   /* Métodos de Gerenciamento de Usuários */
-async getAllUsers(filters) {
-    // <<< MUDANÇA AQUI: Extraímos o 'limit' para tratá-lo >>>
-    const { page = 1, limit = 10, searchTerm, planName } = filters;
-    const where = {};
+async getAllUsers(filters) { // O parâmetro 'filters' não será mais usado aqui
+    try {
+      // <<< MUDANÇA RADICAL: A consulta agora busca todos os usuários >>>
+      // A lógica de paginação e filtragem foi completamente removida do backend.
+      const allUsers = await User.findAll({
+        // Inclui o plano associado, mas usa 'required: false' para garantir
+        // que usuários SEM plano (LEFT JOIN) também sejam retornados.
+        include: [{
+          model: Plan,
+          as: 'currentPlan',
+          required: false, // Isso é CRUCIAL! Faz um LEFT JOIN em vez de INNER JOIN.
+        }],
+        order: [['createdAt', 'DESC']],
+        // Exclui campos sensíveis da resposta.
+        attributes: { exclude: ['password', 'openAiApiKey', 'resetPasswordToken', 'resetPasswordExpires'] }
+      });
 
-    if (searchTerm) {
-      where[Op.or] = [
-        { name: { [Op.iLike]: `%${searchTerm}%` } },
-        { email: { [Op.iLike]: `%${searchTerm}%` } }
-      ];
+      // A API agora retorna apenas o array de usuários diretamente.
+      return allUsers;
+
+    } catch (error) {
+      console.error("Erro ao buscar todos os usuários no serviço:", error);
+      throw error; // Propaga o erro para o controller
     }
-    const includePlan = { model: Plan, as: 'currentPlan', where: {} };
-    if (planName && planName !== 'Todos') {
-      if (planName === 'Nenhum') {
-        where.planId = null;
-      } else {
-        includePlan.where.name = planName;
-      }
-    }
-    
-    // <<< MUDANÇA AQUI: Criamos um objeto de opções para a query >>>
-    const queryOptions = {
-      where,
-      include: [includePlan],
-      order: [['createdAt', 'DESC']],
-      attributes: { exclude: ['password', 'openAiApiKey', 'resetPasswordToken', 'resetPasswordExpires'] }
-    };
-
-    // <<< MUDANÇA PRINCIPAL AQUI: Se o limit não for 'all', aplicamos paginação >>>
-    // Isso nos dá flexibilidade para reativar a paginação no futuro se precisarmos.
-    if (limit !== 'all') {
-      const numericLimit = parseInt(limit, 10);
-      const numericPage = parseInt(page, 10);
-      queryOptions.limit = numericLimit;
-      queryOptions.offset = (numericPage - 1) * numericLimit;
-    }
-
-    const { count, rows } = await User.findAndCountAll(queryOptions);
-
-    // Se a paginação foi desativada, a resposta não precisa ter informações de página.
-    if (limit === 'all') {
-      return {
-        users: rows,
-        total: count,
-        totalPages: 1,
-        currentPage: 1
-      };
-    }
-
-    // A lógica original é mantida para quando a paginação estiver ativa.
-    return { 
-        users: rows, 
-        total: count, 
-        totalPages: Math.ceil(count / parseInt(limit)), 
-        currentPage: parseInt(page) 
-    };
   },
 
   async updateUser(userId, data) {
