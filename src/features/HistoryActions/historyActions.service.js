@@ -28,12 +28,17 @@ const historyActionsService = {
    * @param {string} action - Ação a ser executada ('download_txt', 'download_pdf', 'email_txt', 'email_pdf').
    * @returns {object} Um objeto contendo os dados para a resposta do controller.
    */
-  async processHistoryAction(userId, historyId, action) {
+  async processHistoryAction(userId, historyId, action, options = {}) { // Adicionado 'options' para email
     const user = await User.findByPk(userId);
-    if (!user) throw new Error('Usuário não encontrado.');
+    if (!user) throw { status: 404, message: 'Usuário não encontrado.' };
 
     const history = await AssistantHistory.findOne({
       where: { id: historyId, userId },
+      include: [
+          // Incluímos os modelos associados para ter mais informações para os nomes dos arquivos
+          { association: 'assistant', attributes: ['name'] },
+          { association: 'transcription', attributes: ['originalFileName'] }
+      ]
     });
 
     if (!history) {
@@ -45,7 +50,10 @@ const historyActionsService = {
     }
 
     const { outputText } = history;
-    const baseFileName = `resultado_assistente_${historyId.substring(0, 8)}`;
+    // Nomes de arquivo mais descritivos
+    const transcriptionName = history.transcription?.originalFileName?.replace(/\.[^/.]+$/, "") || 'transcricao';
+    const assistantName = history.assistant?.name?.replace(/\s+/g, '_') || 'assistente';
+    const baseFileName = `${transcriptionName}-${assistantName}`;
 
     switch (action) {
       case 'download_txt':
@@ -56,45 +64,50 @@ const historyActionsService = {
           content: Buffer.from(outputText, 'utf-8'),
         };
 
+      // <<< NOVO CASE PARA DOWNLOAD DE PDF >>>
       case 'download_pdf': {
-        const tempPdfPath = await pdfGenerator.generateTextPdf(outputText, `temp_${baseFileName}`, TEMP_DIR);
+        // Gera um PDF em um diretório temporário
+        const tempPdfPath = await pdfGenerator.generateTextPdf(outputText, `temp_${baseFileName}_${Date.now()}`, TEMP_DIR);
         return {
           type: 'download',
           fileName: `${baseFileName}.pdf`,
           mimeType: 'application/pdf',
-          filePath: tempPdfPath, // Caminho para o arquivo a ser transmitido e depois deletado
+          filePath: tempPdfPath, // Retorna o caminho do arquivo para o controller
         };
       }
 
+      // Cases de email (modificados para usar o 'options' e nomes de arquivo melhores)
       case 'email_txt': {
+        if (!options.recipientEmail) throw { status: 400, message: 'Email do destinatário é obrigatório.'};
         const attachment = {
           filename: `${baseFileName}.txt`,
           content: Buffer.from(outputText, 'utf-8'),
         };
         await emailService.sendEmailWithAttachment(
-          user.email,
-          'Seu Resultado do Assistente',
-          'Olá! Segue em anexo o resultado da sua solicitação ao assistente.',
+          options.recipientEmail,
+          `Seu Conteúdo Gerado: ${history.assistant.name}`,
+          `<p>Olá!</p><p>Segue em anexo o conteúdo gerado pelo assistente <strong>${history.assistant.name}</strong> a partir da transcrição <strong>${history.transcription.originalFileName}</strong>.</p>`,
           attachment
         );
-        return { type: 'email_sent', message: `E-mail com o resultado em TXT enviado para ${user.email}.` };
+        return { type: 'email_sent', message: `E-mail com o resultado em TXT enviado para ${options.recipientEmail}.` };
       }
         
       case 'email_pdf': {
-        const tempPdfPath = await pdfGenerator.generateTextPdf(outputText, `temp_${baseFileName}`, TEMP_DIR);
+        if (!options.recipientEmail) throw { status: 400, message: 'Email do destinatário é obrigatório.'};
+        const tempPdfPath = await pdfGenerator.generateTextPdf(outputText, `temp_${baseFileName}_${Date.now()}`, TEMP_DIR);
         const pdfBuffer = await fs.readFile(tempPdfPath);
         const attachment = {
           filename: `${baseFileName}.pdf`,
           content: pdfBuffer,
         };
         await emailService.sendEmailWithAttachment(
-          user.email,
-          'Seu Resultado do Assistente',
-          'Olá! Segue em anexo o resultado da sua solicitação ao assistente.',
+          options.recipientEmail,
+          `Seu Conteúdo Gerado: ${history.assistant.name}`,
+          `<p>Olá!</p><p>Segue em anexo o conteúdo gerado pelo assistente <strong>${history.assistant.name}</strong> a partir da transcrição <strong>${history.transcription.originalFileName}</strong>.</p>`,
           attachment
         );
         await fs.unlink(tempPdfPath); // Limpa o arquivo temporário
-        return { type: 'email_sent', message: `E-mail com o resultado em PDF enviado para ${user.email}.` };
+        return { type: 'email_sent', message: `E-mail com o resultado em PDF enviado para ${options.recipientEmail}.` };
       }
 
       default:
