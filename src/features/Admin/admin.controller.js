@@ -13,10 +13,12 @@ const adminController = {
   },
 
   /* Métodos de Gerenciamento de Usuários */
-  async getAllUsers(req, res, next) {
+async getAllUsers(req, res, next) {
     try {
-      const result = await adminService.getAllUsers(req.query);
-      res.status(200).json(result);
+      // O serviço agora ignora o req.query e retorna um array simples.
+      const users = await adminService.getAllUsers(req.query);
+      // <<< MUDANÇA: A API agora retorna o array de usuários diretamente >>>
+      res.status(200).json(users);
     } catch (error) { next(error); }
   },
 
